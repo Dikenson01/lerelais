@@ -304,19 +304,38 @@ function App() {
                 filteredContacts.map(contact => (
                   <div key={contact.id} className="conv-card" onClick={() => {
                     const existing = conversations.find(c => c.contact_id === contact.id);
-                    if (existing) setActiveConv(existing);
+                    if (existing) {
+                      setActiveConv(existing);
+                      if (isMobile) setShowChat(true);
+                    }
                   }}>
-                    <div className="main-avatar">{contact.avatar_url ? <img src={contact.avatar_url} alt="" /> : contact.display_name?.[0]}</div>
+                    <div className="avatar-stack">
+                      <div className="main-avatar">{contact.avatar_url ? <img src={contact.avatar_url} alt="" /> : contact.display_name?.[0]}</div>
+                    </div>
                     <div className="conv-info"><span className="name">{contact.display_name}</span></div>
                   </div>
                 ))
               ) : (
                 filteredConversations.map(conv => (
-                  <div key={conv.id} className={`conv-card ${activeConv?.id === conv.id ? 'active' : ''}`} onClick={() => setActiveConv(conv)}>
+                  <div key={conv.id} className={`conv-card ${activeConv?.id === conv.id ? 'active' : ''}`} onClick={() => {
+                    setActiveConv(conv);
+                    if (isMobile) setShowChat(true);
+                  }}>
                     <div className="avatar-stack">
-                      <div className="main-avatar">{conv.contacts?.avatar_url ? <img src={conv.contacts.avatar_url} alt="" /> : (conv.contacts?.display_name?.[0] || '?')}</div>
+                      <div className="main-avatar">{conv.contacts?.avatar_url ? <img src={conv.contacts.avatar_url} alt="" /> : (conv.contacts?.display_name?.[0] || conv.title?.[0] || '?')}</div>
+                      <div className={`platform-pip ${conv.platform}`}>
+                        {conv.platform === 'whatsapp' ? <Smartphone size={10} /> : <Instagram size={10} />}
+                      </div>
                     </div>
-                    <div className="conv-info"><span className="name">{conv.title || conv.contacts?.display_name}</span><p className="preview">{conv.last_message_preview}</p></div>
+                    <div className="conv-info">
+                      <div className="info-top">
+                        <span className="name">{conv.title || conv.contacts?.display_name || 'Sans titre'}</span>
+                        <span className="time">{conv.updated_at ? new Date(conv.updated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}</span>
+                      </div>
+                      <div className="info-bottom">
+                        <p className="preview">{conv.last_message_preview}</p>
+                      </div>
+                    </div>
                   </div>
                 ))
               )}
