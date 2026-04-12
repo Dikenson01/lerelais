@@ -15,7 +15,8 @@ import {
   LayoutGrid,
   Hash,
   Activity,
-  Plus
+  Plus,
+  User
 } from 'lucide-react';
 import './App.css';
 
@@ -25,10 +26,11 @@ const API_BASE = (window.Telegram?.WebApp && window.location.hostname !== 'local
 
 function App() {
   const [conversations, setConversations] = useState([]);
+  const [contacts, setContacts] = useState([]);
   const [activeConv, setActiveConv] = useState(null);
   const [messages, setMessages] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
-  const [view, setView] = useState('all');
+  const [view, setView] = useState('all'); // all, whatsapp, instagram, contacts
   const [tgUser, setTgUser] = useState(null);
   const [messageInput, setMessageInput] = useState('');
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
@@ -47,14 +49,27 @@ function App() {
       tg.setHeaderColor('#0F1011');
       tg.setBackgroundColor('#08090A');
     }
-    
+
     fetchConversations();
-    const interval = setInterval(fetchConversations, 5000);
+    fetchContacts();
+    const interval = setInterval(() => {
+      fetchConversations();
+      fetchContacts();
+    }, 5000);
     return () => {
       clearInterval(interval);
       window.removeEventListener('resize', handleResize);
     };
   }, []);
+
+  const fetchContacts = async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/contacts`);
+      setContacts(res.data);
+    } catch (err) {
+      console.error('Failed to fetch contacts', err);
+    }
+  };
 
   useEffect(() => {
     if (activeConv) {
@@ -127,6 +142,10 @@ function App() {
     return matchesSearch && c.platform === view;
   });
 
+  const filteredContacts = contacts.filter(c => 
+    (c.display_name || '').toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
   const Navigation = () => (
     <nav className={`rail glass ${isMobile ? 'bottom-bar' : ''}`}>
       <div className="rail-top">
@@ -134,7 +153,9 @@ function App() {
         <div className="rail-items">
           <button className={view === 'all' ? 'active' : ''} onClick={() => setView('all')}>
             <LayoutGrid size={isMobile ? 24 : 20} />
-            {!isMobile && <span className="tooltip">Toutes</span>}
+          </button>
+          <button className={view === 'contacts' ? 'active' : ''} onClick={() => setView('contacts')}>
+            <Users size={isMobile ? 24 : 20} />
           </button>
           {!isMobile && <div className="separator" />}
           <button className={view === 'whatsapp' ? 'active whatsapp' : ''} onClick={() => setView('whatsapp')}>
@@ -146,11 +167,6 @@ function App() {
           {isMobile && (
             <button className={view === 'settings' ? 'active' : ''} onClick={() => setView('settings')}>
               <Settings size={24} />
-            </button>
-          )}
-          {!isMobile && (
-            <button className="add-btn">
-              <Plus size={20} />
             </button>
           )}
         </div>
@@ -166,15 +182,13 @@ function App() {
 
   return (
     <div className={`app-layout ${isMobile ? 'mobile' : ''}`}>
-      {/* Sidebar Rail (or Bottom bar) */}
       <Navigation />
 
-      {/* Thread List Pane */}
       <aside className={`thread-pane ${(isMobile && showChat) ? 'hidden' : ''}`}>
         <header className="pane-header">
           <div className="title-row">
-            <h1>Inbox</h1>
-            <div className="badge">{filteredConversations.length}</div>
+            <h1>{view === 'contacts' ? 'Contacts' : 'Inbox'}</h1>
+            <div className="badge">{view === 'contacts' ? filteredContacts.length : filteredConversations.length}</div>
           </div>
           <div className="search-box">
             <Search size={14} />
@@ -188,40 +202,74 @@ function App() {
 
         <div className="conversation-list scrollbar">
           <AnimatePresence mode='popLayout'>
-            {filteredConversations.map(conv => (
-              <motion.div 
-                layout
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, scale: 0.95 }}
-                key={conv.id} 
-                className={`conv-card ${activeConv?.id === conv.id ? 'active' : ''}`}
-                onClick={() => setActiveConv(conv)}
-              >
-                <div className="avatar-stack">
-                  <div className="main-avatar">
-                    {conv.contacts?.avatar_url ? (
-                      <img src={conv.contacts.avatar_url} alt="" />
-                    ) : (
-                      conv.contacts?.display_name?.[0] || '?'
-                    )}
+            {view === 'contacts' ? (
+              filteredContacts.map(contact => (
+                <motion.div 
+                  layout
+                  key={contact.id} 
+                  className="conv-card"
+                  onClick={() => {
+                    // Find or create conversation for this contact
+                    const existing = conversations.find(c => c.contact_id === contact.id);
+                    if (existing) {
+                      setActiveConv(existing);
+                    } else {
+                      // We could implement creating a new conversation here
+                      console.log('New conversation needed for', contact);
+                    }
+                  }}
+                >
+                  <div className="avatar-stack">
+                    <div className="main-avatar">
+                      {contact.avatar_url ? <img src={contact.avatar_url} alt="" /> : contact.display_name?.[0]}
+                    </div>
                   </div>
-                  <div className={`platform-pip ${conv.platform}`}>
-                    {conv.platform === 'whatsapp' ? <Smartphone size={8} /> : <Instagram size={8} />}
+                  <div className="conv-info">
+                    <div className="info-top">
+                      <span className="name">{contact.display_name}</span>
+                    </div>
+                    <div className="info-bottom">
+                      <p className="preview">{contact.username || 'No username'}</p>
+                    </div>
                   </div>
-                </div>
-                <div className="conv-info">
-                  <div className="info-top">
-                    <span className="name">{conv.title || conv.contacts?.display_name || 'Contact inconnu'}</span>
-                    <span className="time">{new Date(conv.updated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                </motion.div>
+              ))
+            ) : (
+              filteredConversations.map(conv => (
+                <motion.div 
+                  layout
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.95 }}
+                  key={conv.id} 
+                  className={`conv-card ${activeConv?.id === conv.id ? 'active' : ''}`}
+                  onClick={() => setActiveConv(conv)}
+                >
+                  <div className="avatar-stack">
+                    <div className="main-avatar">
+                      {conv.contacts?.avatar_url ? (
+                        <img src={conv.contacts.avatar_url} alt="" />
+                      ) : (
+                        conv.contacts?.display_name?.[0] || '?'
+                      )}
+                    </div>
+                    <div className={`platform-pip ${conv.platform}`}>
+                      {conv.platform === 'whatsapp' ? <Smartphone size={8} /> : <Instagram size={8} />}
+                    </div>
                   </div>
-                  <div className="info-bottom">
-                    <p className="preview">{conv.last_message_preview || 'Aucun message'}</p>
-                    {conv.unread_count > 0 && <span className="unread-dot">{conv.unread_count}</span>}
+                  <div className="conv-info">
+                    <div className="info-top">
+                      <span className="name">{conv.title || conv.contacts?.display_name || 'Contact inconnu'}</span>
+                      <span className="time">{new Date(conv.updated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                    </div>
+                    <div className="info-bottom">
+                      <p className="preview">{conv.last_message_preview || 'Aucun message'}</p>
+                      {conv.unread_count > 0 && <span className="unread-dot">{conv.unread_count}</span>}
+                    </div>
                   </div>
-                </div>
-              </motion.div>
-            ))}
+                </motion.div>
+              ))
+            )}
           </AnimatePresence>
         </div>
       </aside>

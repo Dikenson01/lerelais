@@ -131,6 +131,20 @@ app.post('/api/messages', async (req, res) => {
   }
 });
 
+app.get('/api/contacts', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('contacts')
+      .select('*')
+      .order('display_name', { ascending: true });
+    
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/search', async (req, res) => {
   const { q } = req.query;
   if (!q) return res.status(400).json({ error: 'Search query required' });

@@ -206,10 +206,8 @@ export async function connectToWhatsApp(accountId, onMessage, onEvents) {
   };
 
   sock.ev.on('messages.upsert', async (m) => {
-    if (m.type === 'notify') {
-      for (const msg of m.messages) {
-        await handleMessageUpsert(msg);
-      }
+    for (const msg of m.messages) {
+      await handleMessageUpsert(msg);
     }
   });
 
