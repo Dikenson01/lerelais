@@ -161,10 +161,6 @@ app.post('/api/sync/all', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-    res.status(500).json({ error: err.message });
-  }
-});
-
 app.get('/api/search', async (req, res) => {
   const { q } = req.query;
   if (!q) return res.status(400).json({ error: 'Search query required' });
