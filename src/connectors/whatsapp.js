@@ -49,8 +49,17 @@ export async function connectToWhatsApp(accountId, onMessage, onEvents) {
         connectToWhatsApp(accountId, onMessage, onEvents);
       }
     } else if (connection === 'open') {
-      logger.info(`WhatsApp connection opened for account ${accountId}`);
-      await supabase.from('accounts').update({ status: 'connected' }).eq('id', accountId);
+      logger.info(`🌐 WhatsApp connection OPENED for account ${accountId}`);
+      try {
+        const { error } = await supabase.from('accounts').update({ status: 'connected' }).eq('id', accountId);
+        if (error) {
+          logger.error(`❌ Failed to update account status to connected: ${error.message}`);
+        } else {
+          logger.info(`✅ Account status updated to 'connected' in DB for ${accountId}`);
+        }
+      } catch (err) {
+        logger.error(`❌ Unexpected error updating account status: ${err.message}`);
+      }
       if (onEvents?.onConnected) onEvents.onConnected();
     }
   });

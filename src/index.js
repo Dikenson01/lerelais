@@ -170,16 +170,22 @@ const qrMap = new Map();
 app.post('/api/connect/whatsapp', async (req, res) => {
   const accountId = crypto.randomUUID();
   try {
+    logger.info(`🌐 New WhatsApp connection request. ID: ${accountId}`);
     await supabase.from('accounts').insert({ id: accountId, platform: 'whatsapp', status: 'pairing' });
     const sock = await connectToWhatsApp(accountId, (p, f, c, aid, eid) => relayToTelegram(p, f, c, aid, eid), {
-      onQR: (qr) => qrMap.set(accountId, qr),
+      onQR: (qr) => {
+        logger.info(`📸 QR received for ${accountId}`);
+        qrMap.set(accountId, qr);
+      },
       onConnected: () => {
+        logger.info(`✅ Account ${accountId} connected!`);
         qrMap.delete(accountId);
         activeConnectors[accountId] = sock;
       }
     });
     res.json({ accountId });
   } catch (err) {
+    logger.error(`❌ WA Connect Error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
@@ -187,7 +193,11 @@ app.post('/api/connect/whatsapp', async (req, res) => {
 app.get('/api/connect/whatsapp/status/:id', async (req, res) => {
   const accountId = req.params.id;
   const qr = qrMap.get(accountId);
-  const { data: account } = await supabase.from('accounts').select('status').eq('id', accountId).single();
+  const { data: account, error } = await supabase.from('accounts').select('status').eq('id', accountId).single();
+  
+  if (error) logger.error(`Poll error for ${accountId}: ${error.message}`);
+  // logger.info(`🔍 Polling ${accountId}: status=${account?.status}, QR=${qr ? 'YES' : 'NO'}`);
+  
   res.json({ qr: qr || null, status: account?.status || 'unknown' });
 });
 
