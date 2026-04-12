@@ -204,11 +204,14 @@ app.get('/api/connect/whatsapp/status/:id', async (req, res) => {
 app.get('/api/accounts', async (req, res) => {
   try {
     const { data: accounts, error } = await supabase.from('accounts').select('*');
-    if (error) throw error;
-    logger.info(`GET /api/accounts: returning ${accounts?.length || 0} accounts`);
+    if (error) {
+      logger.error(`❌ Supabase error fetching accounts: ${error.message}`);
+      return res.status(500).json({ error: error.message });
+    }
+    logger.info(`📋 GET /api/accounts: returning ${accounts?.length || 0} accounts`);
     res.json(accounts);
   } catch (err) {
-    logger.error('Accounts fetch error:', err);
+    logger.error('❌ Critical error in /api/accounts:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -365,9 +368,21 @@ async function start() {
   await setupMenuButton();
   bot.launch();
   
-  app.listen(port, '0.0.0.0', () => {
+  app.listen(port, '0.0.0.0', async () => {
     logger.info(`🚀 Server on ${port} (0.0.0.0)`);
     logger.info(`📱 Hub URL: ${process.env.WEBAPP_URL}`);
+
+    // Quick DB check
+    try {
+      const { error } = await supabase.from('accounts').select('id').limit(1);
+      if (error) {
+        logger.error(`🚨 DATABASE SCHEMA ALERT: Table 'accounts' might be missing! Error: ${error.message}`);
+      } else {
+        logger.info(`✅ Database connection and 'accounts' table verified.`);
+      }
+    } catch (e) {
+      logger.error(`🚨 Failed to reach database: ${e.message}`);
+    }
   });
 }
 
