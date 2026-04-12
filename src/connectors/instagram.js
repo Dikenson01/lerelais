@@ -48,8 +48,8 @@ export async function connectToInstagram(accountId, username, password, onMessag
                 account_id: accountId,
                 external_id: thread.thread_id,
                 display_name: sender.full_name || sender.username,
-                username: sender.username,
-                avatar_url: sender.profile_pic_url
+                avatar_url: sender.profile_pic_url,
+                metadata: { source: 'instagram', username: sender.username }
               }, { onConflict: 'account_id, external_id' })
               .select().single();
 
@@ -58,23 +58,28 @@ export async function connectToInstagram(accountId, username, password, onMessag
               .from('conversations')
               .upsert({
                 account_id: accountId,
-                contact_id: contact.id,
-                external_conversation_id: thread.thread_id,
+                contact_id: contact?.id,
+                external_id: thread.thread_id,
                 platform: 'instagram',
+                title: sender.full_name || sender.username,
                 last_message_preview: content,
                 updated_at: new Date()
-              }, { onConflict: 'account_id, external_conversation_id' })
+              }, { onConflict: 'account_id, external_id' })
               .select().single();
 
+            if (!conv) continue;
+
             // 3. Save Message
-            await supabase.from('messages').insert({
+            await supabase.from('messages').upsert({
               conversation_id: conv.id,
+              account_id: accountId,
+              remote_id: lastMsg.item_id,
               sender_id: sender.username,
               content: content,
               is_from_me: false,
               timestamp: new Date(lastMsg.timestamp / 1000),
               metadata: { item_id: lastMsg.item_id }
-            });
+            }, { onConflict: 'remote_id' });
 
             if (onMessage) {
               onMessage('instagram', sender.username, content);
