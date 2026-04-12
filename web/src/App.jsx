@@ -35,6 +35,11 @@ function App() {
   const [messageInput, setMessageInput] = useState('');
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
   const [showChat, setShowChat] = useState(false);
+  const [showConnect, setShowConnect] = useState(false);
+  const [connectStep, setConnectStep] = useState('select'); // select, whatsapp_qr, instagram_login
+  const [waQr, setWaQr] = useState(null);
+  const [waAccountId, setWaAccountId] = useState(null);
+  const [igData, setIgData] = useState({ username: '', password: '' });
   const messagesEndRef = useRef(null);
 
   useEffect(() => {
@@ -62,6 +67,15 @@ function App() {
     };
   }, []);
 
+  const fetchConversations = async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/conversations`);
+      setConversations(res.data);
+    } catch (err) {
+      console.error('Failed to fetch conversations', err);
+    }
+  };
+
   const fetchContacts = async () => {
     try {
       const res = await axios.get(`${API_BASE}/contacts`);
@@ -69,6 +83,26 @@ function App() {
     } catch (err) {
       console.error('Failed to fetch contacts', err);
     }
+  };
+
+  const fetchMessages = async (id) => {
+    try {
+      const res = await axios.get(`${API_BASE}/messages/${id}`);
+      setMessages(res.data);
+    } catch (err) {
+      console.error('Failed to fetch messages', err);
+    }
+  };
+
+  const sendMessage = async () => {
+    if (!messageInput.trim() || !activeConv) return;
+    const content = messageInput;
+    setMessageInput('');
+    const tempId = crypto.randomUUID();
+    setMessages(prev => [...prev, { id: tempId, content, is_from_me: true, timestamp: new Date(), status: 'sending' }]);
+    try {
+      await axios.post(`${API_BASE}/messages`, { conversationId: activeConv.id, content });
+    } catch (err) { console.error('Failed to send', err); }
   };
 
   useEffect(() => {
@@ -90,11 +124,114 @@ function App() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
+  const startWhatsAppConnect = async () => {
+    setConnectStep('whatsapp_qr');
+    try {
+      const res = await axios.post(`${API_BASE}/connect/whatsapp`);
+      setWaAccountId(res.data.accountId);
+    } catch (err) { alert('Erreur WhatsApp'); }
+  };
+
+  useEffect(() => {
+    let interval;
+    if (waAccountId && connectStep === 'whatsapp_qr') {
+      interval = setInterval(async () => {
+        const res = await axios.get(`${API_BASE}/connect/whatsapp/qr/${waAccountId}`);
+        if (res.data.qr) setWaQr(res.data.qr);
+      }, 3000);
+    }
+    return () => clearInterval(interval);
+  }, [waAccountId, connectStep]);
+
+  const startInstagramConnect = async () => {
+    setConnectStep('instagram_loading');
+    try {
+      await axios.post(`${API_BASE}/connect/instagram`, igData);
+      setShowConnect(false);
+      setConnectStep('select');
+    } catch (err) { alert('Erreur Instagram'); setConnectStep('instagram_login'); }
+  };
+
+  const ConnectModal = () => (
+    <div className="modal-overlay glass" onClick={() => setShowConnect(false)}>
+      <motion.div 
+        initial={{ scale: 0.9, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        className="connect-modal" 
+        onClick={e => e.stopPropagation()}
+      >
+        <button className="close-modal" onClick={() => setShowConnect(false)}><Plus size={24} style={{ transform: 'rotate(45deg)' }} /></button>
+        
+        {connectStep === 'select' && (
+          <div className="connect-select">
+            <h2>Connecter un compte</h2>
+            <div className="platform-grid">
+              <button onClick={startWhatsAppConnect} className="wa-btn">
+                <Smartphone size={32} />
+                <span>WhatsApp</span>
+              </button>
+              <button onClick={() => setConnectStep('instagram_login')} className="ig-btn">
+                <Instagram size={32} />
+                <span>Instagram</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {connectStep === 'whatsapp_qr' && (
+          <div className="connect-wa">
+            <h2>Scannez le Code QR</h2>
+            <div className="qr-container">
+              {waQr ? (
+                <img src={`https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(waQr)}`} alt="WA QR" />
+              ) : (
+                <div className="qr-placeholder">Génération...</div>
+              )}
+            </div>
+            <p>Ouvrez WhatsApp {'>'} Appareils connectés {'>'} Connecter un appareil</p>
+          </div>
+        )}
+
+        {connectStep === 'instagram_login' && (
+          <form className="connect-ig" onSubmit={e => { e.preventDefault(); startInstagramConnect(); }}>
+            <h2>Connexion Instagram</h2>
+            <div className="ig-inputs">
+              <input 
+                placeholder="Nom d'utilisateur" 
+                value={igData.username}
+                onChange={e => setIgData({...igData, username: e.target.value})}
+              />
+              <input 
+                type="password"
+                placeholder="Mot de passe" 
+                value={igData.password}
+                onChange={e => setIgData({...igData, password: e.target.value})}
+              />
+            </div>
+            <button type="submit" className="ig-submit">Se connecter</button>
+          </form>
+        )}
+      </motion.div>
+    </div>
+  );
+
   const fetchConversations = async () => {
     try {
       const res = await axios.get(`${API_BASE}/conversations`);
       setConversations(res.data);
     } catch (err) {
+      console.error('Failed to fetch conversations', err);
+    }
+  };
+
+  const fetchContacts = async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/contacts`);
+      setContacts(res.data);
+    } catch (err) {
+      console.error('Failed to fetch contacts', err);
+    }
+  };
       console.error('Failed to fetch conversations', err);
     }
   };
@@ -164,6 +301,11 @@ function App() {
           <button className={view === 'instagram' ? 'active instagram' : ''} onClick={() => setView('instagram')}>
             <Instagram size={isMobile ? 24 : 20} />
           </button>
+          {!isMobile && (
+            <button className="add-btn" onClick={() => { setShowConnect(true); setConnectStep('select'); }}>
+              <Plus size={20} />
+            </button>
+          )}
           {isMobile && (
             <button className={view === 'settings' ? 'active' : ''} onClick={() => setView('settings')}>
               <Settings size={24} />
@@ -349,19 +491,33 @@ function App() {
                 </form>
               </footer>
             </motion.div>
-          ) : !isMobile && (
+          ) : (
             <motion.div 
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               className="empty-state"
             >
               <div className="empty-illust"><MessageSquare size={48} /></div>
-              <h3>Sélectionnez une conversation</h3>
-              <p>Tous vos messages WhatsApp et Instagram sont centralisés ici.</p>
+              {conversations.length === 0 ? (
+                <>
+                  <h3>Bienvenue sur LeRelais</h3>
+                  <p>Aucun compte n'est encore connecté à votre instance Railway.</p>
+                  <button className="connect-now" onClick={() => { setShowConnect(true); setConnectStep('select'); }}>
+                    Connecter un compte
+                  </button>
+                </>
+              ) : (
+                <>
+                  <h3>Prêt à discuter ?</h3>
+                  <p>Sélectionnez une conversation dans la liste pour commencer à répondre.</p>
+                </>
+              )}
             </motion.div>
           )}
         </AnimatePresence>
       </main>
+
+      {showConnect && <ConnectModal />}
     </div>
   );
 }

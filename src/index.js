@@ -165,6 +165,44 @@ app.get('/api/search', async (req, res) => {
   res.json({ messages, contacts });
 });
 
+const qrMap = new Map();
+
+app.post('/api/connect/whatsapp', async (req, res) => {
+  const accountId = crypto.randomUUID();
+  try {
+    await supabase.from('accounts').insert({ id: accountId, platform: 'whatsapp', status: 'pairing' });
+    const sock = await connectToWhatsApp(accountId, (p, f, c, aid, eid) => relayToTelegram(p, f, c, aid, eid), {
+      onQR: (qr) => qrMap.set(accountId, qr),
+      onConnected: () => {
+        qrMap.delete(accountId);
+        activeConnectors[accountId] = sock;
+      }
+    });
+    res.json({ accountId });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/connect/whatsapp/qr/:id', (req, res) => {
+  const qr = qrMap.get(req.params.id);
+  res.json({ qr: qr || null });
+});
+
+app.post('/api/connect/instagram', async (req, res) => {
+  const { username, password } = req.body;
+  const accountId = crypto.randomUUID();
+  try {
+    await supabase.from('accounts').insert({ id: accountId, platform: 'instagram', status: 'pairing' });
+    activeConnectors[accountId] = await connectToInstagram(accountId, username, password, (p, f, c, aid, eid) => relayToTelegram(p, f, c, aid, eid), {
+      onConnected: () => logger.info(`IG ${username} connected`)
+    });
+    res.json({ accountId, status: 'connecting' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // --- BOT LOGIC ---
 
 bot.catch((err, ctx) => {
@@ -175,18 +213,15 @@ async function showStartMenu(ctx) {
   const webAppUrl = process.env.WEBAPP_URL || 'http://localhost:5173';
   const isHttps = webAppUrl?.startsWith('https://');
   
-  let text = '✨ *Bienvenue sur LeRelais Hub*\n\nVotre centre de messagerie unifié. Gérez tous vos réseaux au même endroit.';
+  let text = '✨ *Bienvenue sur LeRelais Hub*\n\nVotre centre de messagerie unifiée. Cliquez ci-dessous pour commencer.';
   
   const keyboard = [];
   if (isHttps) {
-    keyboard.push([{ text: '🚀 Ouvrir l’Inbox Unifiée', web_app: { url: webAppUrl } }]);
+    keyboard.push([{ text: '🚀 Le Relais', web_app: { url: webAppUrl } }]);
   } else {
-    keyboard.push([{ text: '🚀 Ouvrir l’Inbox (Browser)', url: webAppUrl }]);
+    keyboard.push([{ text: '🚀 Le Relais (Browser)', url: webAppUrl }]);
   }
   
-  keyboard.push([{ text: '🔗 Connecter un Compte', callback_data: 'menu_connect' }]);
-  keyboard.push([{ text: '📊 État des Services', callback_data: 'menu_status' }]);
-
   try {
     if (ctx.callbackQuery) {
       return await ctx.editMessageText(text, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } });
@@ -197,95 +232,25 @@ async function showStartMenu(ctx) {
   }
 }
 
-async function showStatus(ctx) {
-  const { data: accounts, error } = await supabase
-    .from('accounts')
-    .select('id, platform, status');
-  
-  if (error) return ctx.reply('❌ Erreur de base de données.');
-
-  if (!accounts || accounts.length === 0) {
-    return ctx.reply('📭 Aucun compte connecté.', {
-      reply_markup: { inline_keyboard: [[{ text: '🔗 Connecter un compte', callback_data: 'menu_connect' }]] }
-    });
-  }
-
-  const statusMsg = accounts.map(a => {
-    const icon = a.status === 'connected' ? '✅' : '⏳';
-    const activeIcon = activeConnectors[a.id] ? '🔗' : '❌';
-    return `${icon} ${activeIcon} *${a.platform.toUpperCase()}* - _${a.status}_`;
-  }).join('\n');
-
-  ctx.reply(`📊 *Connexions :*\n\n${statusMsg}`, {
-    parse_mode: 'Markdown',
-    reply_markup: { inline_keyboard: [[{ text: '◀️ Retour', callback_data: 'menu_start' }]] }
-  });
-}
-
 bot.start(showStartMenu);
 bot.action('menu_start', ctx => showStartMenu(ctx));
-bot.action('menu_status', ctx => showStatus(ctx));
-bot.action('menu_connect', async (ctx) => {
-  const keyboard = [
-    [{ text: '🟢 WhatsApp', callback_data: 'connect_whatsapp' }],
-    [{ text: '📸 Instagram', callback_data: 'connect_instagram' }],
-    [{ text: '◀️ Retour', callback_data: 'menu_start' }]
-  ];
-  ctx.editMessageText('🌐 *Choisissez une plateforme :*', { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } });
-});
 
-bot.action('connect_instagram', async (ctx) => {
-  userState[ctx.from.id] = { action: 'awaiting_ig_username' };
-  ctx.reply('📸 Entrez votre nom d\'utilisateur Instagram :');
-});
-
-bot.action('connect_whatsapp', async (ctx) => {
-  const keyboard = [
-    [{ text: '🖼 Code QR', callback_data: 'wa_connect_qr' }],
-    [{ text: '🔢 Code de Jumelage', callback_data: 'wa_connect_phone' }]
-  ];
-  ctx.editMessageText('📱 *Connexion WhatsApp*', { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } });
-});
-
-bot.action('wa_connect_qr', ctx => handleConnectWhatsApp(ctx));
-bot.action('wa_connect_phone', ctx => {
-  userState[ctx.from.id] = { action: 'awaiting_phone' };
-  ctx.reply('📞 Entrez votre numéro (+33...) :');
-});
-
+async function setupMenuButton() {
+  try {
+    const webAppUrl = process.env.WEBAPP_URL || 'http://localhost:5173';
+    if (webAppUrl.startsWith('https://')) {
+      await bot.telegram.setChatMenuButton({ menu_button: { type: 'web_app', text: 'Le Relais', web_app: { url: webAppUrl } } });
+      logger.info('✅ Menu Button configured');
+    }
+  } catch (err) {
+    logger.error('❌ Menu button failed:', err);
+  }
+}
 bot.on('text', async (ctx, next) => {
-  const state = userState[ctx.from.id];
   const text = ctx.message.text?.trim();
   if (!text) return next();
 
-  // 1. Instagram Flow
-  if (state?.action === 'awaiting_ig_username') {
-    userState[ctx.from.id] = { action: 'awaiting_ig_password', username: text };
-    return ctx.reply('🔐 Entrez le mot de passe Instagram :');
-  }
-  if (state?.action === 'awaiting_ig_password') {
-    const { username } = state;
-    delete userState[ctx.from.id];
-    ctx.reply(`📸 Tentative de connexion pour ${username}...`);
-    try {
-      const accountId = crypto.randomUUID();
-      await supabase.from('accounts').insert({ id: accountId, platform: 'instagram', status: 'pairing' });
-      activeConnectors[accountId] = await connectToInstagram(accountId, username, text, (p, f, c, aid, eid) => {
-        relayToTelegram(p, f, c, aid, eid);
-      }, { onConnected: () => ctx.reply('✅ Instagram connecté !') });
-    } catch (err) {
-      ctx.reply(`❌ Échec : ${err.message}`);
-    }
-    return;
-  }
-
-  // 2. WhatsApp Flow
-  if (state?.action === 'awaiting_phone') {
-    delete userState[ctx.from.id];
-    return handleConnectWhatsApp(ctx, text);
-  }
-
-  // 3. Replies
+  // Replies only - Connection logic moved to Mini App
   if (ctx.message.reply_to_message) {
     const meta = relayMap.get(ctx.message.reply_to_message.message_id);
     if (meta) {
