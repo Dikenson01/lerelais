@@ -322,7 +322,7 @@ function App() {
                     if (isMobile) setShowChat(true);
                   }}>
                     <div className="avatar-stack">
-                      <div className="main-avatar">{conv.contacts?.avatar_url ? <img src={conv.contacts.avatar_url} alt="" /> : (conv.contacts?.display_name?.[0] || conv.title?.[0] || '?')}</div>
+                      <div className="main-avatar">{conv.contacts?.avatar_url ? <img src={conv.contacts.avatar_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '12px' }} /> : (conv.contacts?.display_name?.[0] || conv.title?.[0] || '?')}</div>
                       <div className={`platform-pip ${conv.platform}`}>
                         {conv.platform === 'whatsapp' ? <Smartphone size={10} /> : <Instagram size={10} />}
                       </div>
