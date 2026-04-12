@@ -219,6 +219,7 @@ function App() {
           <div className={`nav-item ${view === 'all' ? 'active' : ''}`} onClick={() => setView('all')}><LayoutGrid size={24} /></div>
           <div className={`nav-item ${view === 'whatsapp' ? 'active' : ''}`} onClick={() => setView('whatsapp')}><Smartphone size={24} /></div>
           <div className={`nav-item ${view === 'instagram' ? 'active' : ''}`} onClick={() => setView('instagram')}><Instagram size={24} /></div>
+          <div className={`nav-item ${view === 'settings' ? 'active' : ''}`} onClick={() => setView('settings')}><Settings size={24} /></div>
         </div>
         <div className="nav-add-btn" onClick={() => { setShowConnect(true); setConnectStep('select'); }}>
           <Plus size={24} />
@@ -236,7 +237,32 @@ function App() {
         </header>
 
         <div className="scroll-area">
-          {filteredConvs.length > 0 ? (
+          {view === 'settings' ? (
+            <div style={{ padding: '20px' }}>
+              <h3 style={{ fontSize: '12px', color: 'var(--dim-gray)', textTransform: 'uppercase', letter-spacing: '0.4px', marginBottom: '16px' }}>Comptes</h3>
+              {accounts.map(acc => (
+                <div key={acc.id} className="conv-card" style={{ cursor: 'default', background: 'var(--bg-card)', marginBottom: '10px' }}>
+                  <div className="avatar-wrap">
+                    {acc.profile_pic_url ? <img src={acc.profile_pic_url} alt="" /> : (acc.platform === 'whatsapp' ? <Smartphone size={20} /> : <Instagram size={20} />)}
+                  </div>
+                  <div className="conv-info">
+                    <strong>{acc.account_name || acc.username || acc.platform}</strong>
+                    <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
+                      <div className="status-pill" style={{ opacity: 0.8 }}>{acc.status}</div>
+                      <button onClick={() => disconnectAccount(acc.id)} style={{ background: 'transparent', border: 'none', color: 'var(--accent-ig)', fontSize: '11px', cursor: 'pointer' }}>Déconnecter</button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+              <button 
+                onClick={() => axios.post(`${API_BASE}/sync/all`).then(() => alert('Synchro lancée'))}
+                className="btn-secondary" 
+                style={{ width: '100%', marginTop: '20px', fontSize: '13px' }}
+              >
+                Forcer la Synchronisation
+              </button>
+            </div>
+          ) : filteredConvs.length > 0 ? (
             filteredConvs.map(c => (
               <div 
                 key={c.id} 
@@ -258,13 +284,6 @@ function App() {
               <MessageSquare size={32} />
               <h3>Aucun message</h3>
               <p>Ajoutez un compte avec le bouton + pour commencer.</p>
-              {accounts.length > 0 && (
-                <div style={{ marginTop: '20px', display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'center' }}>
-                  {accounts.map(acc => (
-                    <div key={acc.id} className="status-pill" style={{ opacity: 0.5 }}>{acc.account_name}</div>
-                  ))}
-                </div>
-              )}
             </div>
           )}
         </div>
