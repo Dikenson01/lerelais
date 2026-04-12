@@ -314,7 +314,7 @@ function App() {
               </div>
             ) : (
               <div className="chat-empty">
-                <div className="empty-icon glass" style={{ width: '80px', height: '80px', borderRadius: '24px', display: 'flex', alignItems: 'center', justify-content: 'center', background: 'rgba(255,255,255,0.03)', marginBottom: '20px' }}><MessageSquare size={40} /></div>
+                <div className="empty-icon glass" style={{ width: '80px', height: '80px', borderRadius: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.03)', marginBottom: '20px' }}><MessageSquare size={40} /></div>
                 <h3>Votre Centre Relais</h3>
                 <p>Vos messages WhatsApp et Instagram centralisés en un seul endroit.</p>
                 {accounts.length === 0 && (
