@@ -145,15 +145,15 @@ function App() {
     if (!selectedContact) return null;
     const existing = conversations.find(c => c.contact_id === selectedContact.id);
     return (
-      <div className="modal-overlay glass" onClick={() => setSelectedContact(null)}>
-        <div className="profile-modal shadow-max" onClick={e => e.stopPropagation()}>
+      <div className="modal-overlay" onClick={() => setSelectedContact(null)}>
+        <div className="profile-modal" onClick={e => e.stopPropagation()}>
           <button className="close-btn" onClick={() => setSelectedContact(null)}><Plus style={{ transform: 'rotate(45deg)' }} /></button>
           <div className="profile-hero">
             <div className="avatar-large">
               {selectedContact.avatar_url ? <img src={selectedContact.avatar_url} alt="" /> : (selectedContact.display_name?.[0] || '?')}
             </div>
             <h2>{selectedContact.display_name || 'Sans Nom'}</h2>
-            <div className="id-tag">{selectedContact.external_id?.split('@')[0]}</div>
+            <div className="id-tag">@{selectedContact.external_id?.split('@')[0]}</div>
           </div>
           <div className="profile-actions">
             <button className="primary-btn" onClick={() => {
@@ -177,6 +177,45 @@ function App() {
   });
 
   const filteredContacts = (contacts || []).filter(c => (c.display_name || '').toLowerCase().includes(searchQuery.toLowerCase()));
+
+  const ConnectModal = () => (
+    <div className="modal-overlay" onClick={() => setShowConnect(false)}>
+      <div className="modal-content" onClick={e => e.stopPropagation()}>
+        <button className="close-btn" onClick={() => setShowConnect(false)}><Plus style={{ transform: 'rotate(45deg)' }} /></button>
+        {connectStep === 'select' && (
+          <div className="step-select">
+            <h2>Nouveau Compte</h2>
+            <p style={{ color: 'var(--text-dim)', marginBottom: '24px' }}>Choisissez votre plateforme</p>
+            <div className="plat-grid">
+              <button onClick={startWhatsAppConnect} className="btn-wa">
+                <Smartphone size={24} /> WhatsApp
+              </button>
+              <button onClick={() => setConnectStep('ig_login')} className="btn-ig">
+                <Instagram size={24} /> Instagram
+              </button>
+            </div>
+          </div>
+        )}
+        {connectStep === 'whatsapp_qr' && (
+          <div className="step-qr">
+            <h2>Scanner le QR Code</h2>
+            <div className="qr-box shadow-max" style={{ background: '#fff', padding: '15px', borderRadius: '20px', display: 'inline-block', marginTop: '20px' }}>
+              {waQr ? <img src={`https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(waQr)}`} alt="QR" style={{ display: 'block' }} /> : 'Génération...'}
+            </div>
+            <p style={{ marginTop: '20px', color: 'var(--text-dim)' }}>Ouvrez WhatsApp > Appareils connectés</p>
+          </div>
+        )}
+        {connectStep === 'ig_login' && (
+          <form className="step-ig" onSubmit={e => { e.preventDefault(); startInstagramConnect(); }}>
+            <h2>Instagram</h2>
+            <input placeholder="Utilisateur" value={igData.username} onChange={e => setIgData({...igData, username: e.target.value})} style={{ width: '100%', padding: '15px', borderRadius: '12px', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border)', color: '#fff', marginBottom: '10px' }} />
+            <input type="password" placeholder="Mot de passe" value={igData.password} onChange={e => setIgData({...igData, password: e.target.value})} style={{ width: '100%', padding: '15px', borderRadius: '12px', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border)', color: '#fff', marginBottom: '20px' }} />
+            <button type="submit" className="primary-btn" style={{ width: '100%' }}>Se connecter</button>
+          </form>
+        )}
+      </div>
+    </div>
+  );
 
   return (
     <div className={`app-container ${isMobile ? 'is-mobile' : ''}`}>
@@ -253,7 +292,7 @@ function App() {
           <main className={`chat-pane ${!activeConv && isMobile ? 'hide' : ''}`}>
             {activeConv ? (
               <div className="chat-box">
-                <header className="chat-head glass">
+                <header className="chat-head">
                   {isMobile && <button onClick={() => setActiveConv(null)} className="back-btn"><Plus style={{ transform: 'rotate(45deg)' }} /></button>}
                   <div className="head-avatar">{activeConv.contacts?.avatar_url ? <img src={activeConv.contacts.avatar_url} alt="" /> : (activeConv.title?.[0] || '?')}</div>
                   <div className="head-info"><h3>{activeConv.title || activeConv.contacts?.display_name}</h3><div className="online"><span />En ligne</div></div>
@@ -268,55 +307,28 @@ function App() {
                 </div>
                 <div className="msg-input-wrap">
                   <form onSubmit={e => { e.preventDefault(); sendMessage(); }}>
-                    <input placeholder="Écrire un message..." value={messageInput} onChange={e => setMessageInput(e.target.value)} />
+                    <input placeholder="Répondre..." value={messageInput} onChange={e => setMessageInput(e.target.value)} />
                     <button type="submit" disabled={!messageInput.trim()}><Send size={20} /></button>
                   </form>
                 </div>
               </div>
             ) : (
               <div className="chat-empty">
-                <MessageSquare size={64} />
-                <h3>Choisissez une conversation</h3>
-                <p>Vos messages WhatsApp et Instagram centralisés ici.</p>
+                <div className="empty-icon glass" style={{ width: '80px', height: '80px', borderRadius: '24px', display: 'flex', alignItems: 'center', justify-content: 'center', background: 'rgba(255,255,255,0.03)', marginBottom: '20px' }}><MessageSquare size={40} /></div>
+                <h3>Votre Centre Relais</h3>
+                <p>Vos messages WhatsApp et Instagram centralisés en un seul endroit.</p>
+                {accounts.length === 0 && (
+                  <button className="main-add-btn" onClick={() => { setShowConnect(true); setConnectStep('select'); }}>
+                    Connecter un compte
+                  </button>
+                )}
               </div>
             )}
           </main>
         </>
       )}
 
-      {/* Modals */}
-      {showConnect && (
-        <div className="modal-overlay glass" onClick={() => setShowConnect(false)}>
-          <div className="modal-content glass shadow-max" onClick={e => e.stopPropagation()}>
-            <button className="close-btn" onClick={() => setShowConnect(false)}><Plus style={{ transform: 'rotate(45deg)' }} /></button>
-            {connectStep === 'select' && (
-              <div className="step-select">
-                <h2>Nouveau Compte</h2>
-                <div className="plat-grid">
-                  <button onClick={startWhatsAppConnect} className="btn-wa">WhatsApp</button>
-                  <button onClick={() => setConnectStep('ig_login')} className="btn-ig">Instagram</button>
-                </div>
-              </div>
-            )}
-            {connectStep === 'whatsapp_qr' && (
-              <div className="step-qr">
-                <h2>Scannez pour lier</h2>
-                <div className="qr-box">
-                  {waQr ? <img src={`https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(waQr)}`} alt="QR" /> : 'Génération...'}
-                </div>
-              </div>
-            )}
-            {connectStep === 'ig_login' && (
-              <form className="step-ig" onSubmit={e => { e.preventDefault(); startInstagramConnect(); }}>
-                <h2>Instagram Login</h2>
-                <input placeholder="Utilisateur" value={igData.username} onChange={e => setIgData({...igData, username: e.target.value})} />
-                <input type="password" placeholder="Mot de passe" value={igData.password} onChange={e => setIgData({...igData, password: e.target.value})} />
-                <button type="submit" className="submit-btn">Se connecter</button>
-              </form>
-            )}
-          </div>
-        </div>
-      )}
+      {showConnect && <ConnectModal />}
       {selectedContact && <ProfileModal />}
     </div>
   );
