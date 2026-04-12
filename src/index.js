@@ -184,9 +184,11 @@ app.post('/api/connect/whatsapp', async (req, res) => {
   }
 });
 
-app.get('/api/connect/whatsapp/qr/:id', (req, res) => {
-  const qr = qrMap.get(req.params.id);
-  res.json({ qr: qr || null });
+app.get('/api/connect/whatsapp/status/:id', async (req, res) => {
+  const accountId = req.params.id;
+  const qr = qrMap.get(accountId);
+  const { data: account } = await supabase.from('accounts').select('status').eq('id', accountId).single();
+  res.json({ qr: qr || null, status: account?.status || 'unknown' });
 });
 
 app.get('/api/accounts', async (req, res) => {

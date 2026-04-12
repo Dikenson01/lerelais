@@ -142,8 +142,19 @@ function App() {
     let interval;
     if (waAccountId && connectStep === 'whatsapp_qr') {
       interval = setInterval(async () => {
-        const res = await axios.get(`${API_BASE}/connect/whatsapp/qr/${waAccountId}`);
-        if (res.data.qr) setWaQr(res.data.qr);
+        try {
+          const res = await axios.get(`${API_BASE}/connect/whatsapp/status/${waAccountId}`);
+          if (res.data.status === 'connected') {
+            setShowConnect(false);
+            setConnectStep('select');
+            setWaAccountId(null);
+            setWaQr(null);
+            fetchAccountsList();
+            clearInterval(interval);
+          } else {
+            setWaQr(res.data.qr);
+          }
+        } catch (e) { console.error('Poll error', e); }
       }, 3000);
     }
     return () => clearInterval(interval);
