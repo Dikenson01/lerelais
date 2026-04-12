@@ -367,17 +367,20 @@ async function start() {
 
   await setupMenuButton();
   
-  // Safe launch for Telegram Bot (avoid 409 Conflict crash)
+  // Clean start for Telegram Bot (resolve 409 Conflict)
   try {
-    bot.launch().catch(err => {
+    await bot.telegram.deleteWebhook({ drop_pending_updates: true });
+    bot.launch().then(() => {
+      logger.info('🚀 Telegram Bot launched successfully');
+    }).catch(err => {
       if (err.response?.error_code === 409) {
-        logger.warn('⚠️ Telegram Bot: 409 Conflict. Another instance is likely running.');
+        logger.warn('⚠️ Telegram Bot: 409 Conflict persists. Another instance is still active.');
       } else {
         logger.error('❌ Telegram Bot Launch Error:', err);
       }
     });
   } catch (e) {
-    logger.error('❌ Bot crash during launch:', e);
+    logger.error('❌ Failed to clean Telegram webhook:', e);
   }
   
   app.listen(port, '0.0.0.0', async () => {
