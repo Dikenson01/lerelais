@@ -101,7 +101,7 @@ app.post('/api/messages', async (req, res) => {
     if (!connector) throw new Error('Account disconnected or not found');
 
     if (conv.platform === 'whatsapp') {
-      await connector.sendMessage(conv.external_conversation_id, { text: content });
+      await connector.sendMessage(conv.external_id, { text: content });
     } else if (conv.platform === 'instagram') {
       await connector.sendMessage(conv.external_conversation_id, content);
     }
@@ -366,7 +366,19 @@ async function start() {
   }
 
   await setupMenuButton();
-  bot.launch();
+  
+  // Safe launch for Telegram Bot (avoid 409 Conflict crash)
+  try {
+    bot.launch().catch(err => {
+      if (err.response?.error_code === 409) {
+        logger.warn('⚠️ Telegram Bot: 409 Conflict. Another instance is likely running.');
+      } else {
+        logger.error('❌ Telegram Bot Launch Error:', err);
+      }
+    });
+  } catch (e) {
+    logger.error('❌ Bot crash during launch:', e);
+  }
   
   app.listen(port, '0.0.0.0', async () => {
     logger.info(`🚀 Server on ${port} (0.0.0.0)`);

@@ -87,7 +87,7 @@ export async function connectToWhatsApp(accountId, onMessage, onEvents) {
         account_id: accountId,
         external_id: c.id,
         display_name: c.name || c.verifiedName || c.notify || c.id.split('@')[0],
-        avatar_url: null, // Profiles pics need a separate fetch
+        avatar_url: null,
         metadata: { source: 'whatsapp' }
       }));
       await supabase.from('contacts').upsert(contactData, { onConflict: 'account_id, external_id' });
@@ -95,7 +95,6 @@ export async function connectToWhatsApp(accountId, onMessage, onEvents) {
 
     // 2. Sync Conversations (Chats)
     if (chats.length > 0) {
-      // First, we need to make sure all contacts exist to satisfy FK constraints
       for (const chat of chats) {
         let avatarUrl = null;
         try {
@@ -113,10 +112,11 @@ export async function connectToWhatsApp(accountId, onMessage, onEvents) {
           await supabase.from('conversations').upsert({
             account_id: accountId,
             contact_id: contact.id,
-            external_conversation_id: chat.id,
+            external_id: chat.id,
             platform: 'whatsapp',
+            title: chat.name || chat.id.split('@')[0],
             updated_at: new Date()
-          }, { onConflict: 'account_id, external_conversation_id' });
+          }, { onConflict: 'account_id, external_id' });
         }
       }
     }
@@ -124,83 +124,76 @@ export async function connectToWhatsApp(accountId, onMessage, onEvents) {
     // 3. Sync recent messages
     if (messages.length > 0) {
       logger.info(`📜 Processing ${messages.length} historical messages...`);
-      // We only take the last few to avoid overloading
-      const recentMessages = messages.slice(-50); 
-      for (const m of recentMessages) {
-        await handleMessageUpsert(m.message, true); // Simplified helper
+      for (const m of messages.slice(-100)) { 
+        await handleMessageUpsert(m.message || m, true);
       }
     }
   });
 
   sock.ev.on('chats.upsert', async (newChats) => {
     for (const chat of newChats) {
-      let avatarUrl = null;
-      try {
-        avatarUrl = await sock.profilePictureUrl(chat.id, 'image').catch(() => null);
-      } catch (e) {}
-
       const { data: contact } = await supabase.from('contacts').upsert({
         account_id: accountId,
         external_id: chat.id,
-        display_name: chat.name || chat.id.split('@')[0],
-        avatar_url: avatarUrl
+        display_name: chat.name || chat.id.split('@')[0]
       }, { onConflict: 'account_id, external_id' }).select().single();
-      
+
       if (contact) {
         await supabase.from('conversations').upsert({
           account_id: accountId,
           contact_id: contact.id,
-          external_conversation_id: chat.id,
+          external_id: chat.id,
           platform: 'whatsapp',
+          title: chat.name || chat.id.split('@')[0],
           updated_at: new Date()
-        }, { onConflict: 'account_id, external_conversation_id' });
+        }, { onConflict: 'account_id, external_id' });
       }
     }
   });
 
   const handleMessageUpsert = async (msg, isHistory = false) => {
     try {
-      const remoteJid = msg.key.remoteJid;
+      const message = msg.message || msg;
+      const key = msg.key || message.key;
+      const remoteJid = key?.remoteJid;
       if (!remoteJid) return;
 
-      const content = msg.message?.conversation || msg.message?.extendedTextMessage?.text || (msg.message?.imageMessage ? '[Image]' : '[Media]');
+      const content = message.conversation || message.extendedTextMessage?.text || (message.imageMessage ? '[Image]' : message.videoMessage ? '[Vidéo]' : '[Média]');
       
-      let avatarUrl = null;
-      try {
-        avatarUrl = await sock.profilePictureUrl(remoteJid, 'image').catch(() => null);
-      } catch (e) {}
-
       const { data: contact } = await supabase.from('contacts').upsert({
         account_id: accountId,
         external_id: remoteJid,
-        display_name: msg.pushName || remoteJid.split('@')[0],
-        avatar_url: avatarUrl
+        display_name: msg.pushName || remoteJid.split('@')[0]
       }, { onConflict: 'account_id, external_id' }).select().single();
 
       if (!contact) return;
 
-      const { data: conv } = await supabase.from('conversations').upsert({
+      const { data: conv, error: convErr } = await supabase.from('conversations').upsert({
         account_id: accountId,
         contact_id: contact.id,
-        external_conversation_id: remoteJid,
+        external_id: remoteJid,
         platform: 'whatsapp',
         last_message_preview: content?.slice(0, 100),
         updated_at: new Date()
-      }, { onConflict: 'account_id, external_conversation_id' }).select().single();
+      }, { onConflict: 'account_id, external_id' }).select().single();
 
-      if (!conv) return;
+      if (convErr || !conv) return;
 
+      // Upsert Message
       await supabase.from('messages').upsert({
         conversation_id: conv.id,
-        sender_id: msg.key.fromMe ? 'me' : remoteJid,
+        account_id: accountId,
+        remote_id: key.id,
+        sender_id: key.fromMe ? 'me' : remoteJid,
         content: content || '',
-        is_from_me: !!msg.key.fromMe,
+        is_from_me: !!key.fromMe,
         timestamp: new Date((msg.messageTimestamp || Date.now() / 1000) * 1000),
-        metadata: { message_id: msg.key.id }
-      }, { onConflict: 'conversation_id, metadata->>message_id' }); // Use unique message ID
+        media_type: message.imageMessage ? 'image' : message.videoMessage ? 'video' : null,
+        metadata: { ...message, pushName: msg.pushName }
+      }, { onConflict: 'remote_id' });
 
-      if (!isHistory && onMessage && !msg.key.fromMe) {
-        onMessage('whatsapp', contact.display_name || remoteJid, content, accountId, remoteJid);
+      if (!isHistory && onMessage && !key.fromMe) {
+        onMessage('whatsapp', msg.pushName || remoteJid, content, accountId, remoteJid);
       }
     } catch (err) {
       logger.error(`Sync error: ${err.message}`);
