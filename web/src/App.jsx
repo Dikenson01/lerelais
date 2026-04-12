@@ -215,64 +215,6 @@ function App() {
     </div>
   );
 
-  const fetchConversations = async () => {
-    try {
-      const res = await axios.get(`${API_BASE}/conversations`);
-      setConversations(res.data);
-    } catch (err) {
-      console.error('Failed to fetch conversations', err);
-    }
-  };
-
-  const fetchContacts = async () => {
-    try {
-      const res = await axios.get(`${API_BASE}/contacts`);
-      setContacts(res.data);
-    } catch (err) {
-      console.error('Failed to fetch contacts', err);
-    }
-  };
-      console.error('Failed to fetch conversations', err);
-    }
-  };
-
-  const fetchMessages = async (id) => {
-    try {
-      const res = await axios.get(`${API_BASE}/messages/${id}`);
-      setMessages(res.data);
-    } catch (err) {
-      console.error('Failed to fetch messages', err);
-    }
-  };
-
-  const sendMessage = async () => {
-    if (!messageInput.trim() || !activeConv) return;
-    
-    const content = messageInput;
-    setMessageInput('');
-    
-    const tempId = crypto.randomUUID();
-    const optimisticMsg = {
-      id: tempId,
-      conversation_id: activeConv.id,
-      content,
-      is_from_me: true,
-      timestamp: new Date().toISOString(),
-      status: 'sending'
-    };
-    setMessages(prev => [...prev, optimisticMsg]);
-
-    try {
-      await axios.post(`${API_BASE}/messages`, {
-        conversationId: activeConv.id,
-        content
-      });
-    } catch (err) {
-      console.error('Failed to send message', err);
-      setMessages(prev => prev.map(m => m.id === tempId ? { ...m, status: 'error' } : m));
-    }
-  };
-
   const filteredConversations = conversations.filter(c => {
     const matchesSearch = (c.title || c.contacts?.display_name || '').toLowerCase().includes(searchQuery.toLowerCase());
     if (view === 'all') return matchesSearch;
