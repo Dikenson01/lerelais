@@ -25,21 +25,33 @@ const port = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-// --- FRONTEND INTEGRATION ---
-if (process.env.NODE_ENV !== 'production' && !process.env.NO_VITE) {
-  logger.info('Starting Vite dev server for frontend...');
-  const vite = spawn('npm', ['run', 'dev'], { 
-    cwd: path.resolve(__dirname, '../web'),
-    stdio: 'inherit',
-    shell: true 
-  });
-  
-  process.on('SIGINT', () => vite.kill());
-  process.on('SIGTERM', () => vite.kill());
-}
+// --- PRODUCTION / RAILWAY OPTIMIZATION ---
+app.get('/health', (req, res) => res.status(200).send('OK'));
 
 const distPath = path.resolve(__dirname, '../web/dist');
-app.use(express.static(distPath));
+
+if (process.env.NODE_ENV === 'production') {
+  logger.info('Running in PRODUCTION mode');
+  app.use(express.static(distPath));
+  // Serve index.html for any unknown routes (SPA support)
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api')) return next();
+    res.sendFile(path.join(distPath, 'index.html'));
+  });
+} else {
+  // --- FRONTEND INTEGRATION (DEV) ---
+  if (!process.env.NO_VITE) {
+    logger.info('Starting Vite dev server for frontend...');
+    const vite = spawn('npm', ['run', 'dev'], { 
+      cwd: path.resolve(__dirname, '../web'),
+      stdio: 'inherit',
+      shell: true 
+    });
+    
+    process.on('SIGINT', () => vite.kill());
+    process.on('SIGTERM', () => vite.kill());
+  }
+}
 
 // State
 const activeConnectors = {};
@@ -351,18 +363,31 @@ async function setupMenuButton() {
 
 async function start() {
   await restoreConnectors();
+  
+  // Production / Railway URL handling
+  if (process.env.RAILWAY_STATIC_URL) {
+    process.env.WEBAPP_URL = `https://${process.env.RAILWAY_STATIC_URL}`;
+    logger.info(`🌐 Railway Production URL: ${process.env.WEBAPP_URL}`);
+  }
+
+  // Tunneling for Mini App (Dev only)
   let pubUrl = process.env.WEBAPP_URL || 'http://localhost:5173';
-  if (pubUrl.includes('localhost')) {
+  if (pubUrl.includes('localhost') && process.env.NODE_ENV !== 'production') {
     try {
       const tunnel = await localtunnel({ port: 5173 });
       pubUrl = tunnel.url;
       process.env.WEBAPP_URL = pubUrl;
-      logger.info(`✨ Tunnel: ${pubUrl}`);
+      logger.info(`✨ Dev Tunnel: ${pubUrl}`);
     } catch (e) { logger.error('Tunnel failed'); }
   }
+
   await setupMenuButton();
   bot.launch();
-  app.listen(port, () => logger.info(`🚀 Server on ${port}`));
+  
+  app.listen(port, '0.0.0.0', () => {
+    logger.info(`🚀 Server on ${port} (0.0.0.0)`);
+    logger.info(`📱 Hub URL: ${process.env.WEBAPP_URL}`);
+  });
 }
 
 start();
