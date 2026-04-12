@@ -88,7 +88,9 @@ export async function connectToWhatsApp(accountId, onMessage, onEvents) {
 
   // (Event listeners for messages/history/contacts remain same as previous turno but optimized)
   sock.ev.on('messaging-history.sync', async ({ chats, contacts, messages }) => {
-    logger.info(`📥 History Sync: ${chats.length} chats`);
+    logger.info(`📥 History Sync: ${chats.length} chats, ${messages?.length || 0} messages`);
+    
+    // 1. Sync Chats & Conversations
     for (const chat of chats) {
       const { data: contact } = await supabase.from('contacts').upsert({
         account_id: accountId,
@@ -103,8 +105,32 @@ export async function connectToWhatsApp(accountId, onMessage, onEvents) {
           external_id: chat.id,
           platform: 'whatsapp',
           title: chat.name || chat.id.split('@')[0],
+          last_message_preview: chat.lastMessageRecvTimestamp ? 'Historique synchronisé' : null,
           updated_at: new Date()
         }, { onConflict: 'account_id, external_id' });
+      }
+    }
+
+    // 2. Sync History Messages
+    if (messages && messages.length > 0) {
+      for (const msg of messages) {
+        const remoteJid = msg.key.remoteJid;
+        if (!remoteJid) continue;
+        const content = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '[Média]';
+        
+        // Find existing conversation
+        const { data: conv } = await supabase.from('conversations').select('id').eq('account_id', accountId).eq('external_id', remoteJid).single();
+        if (conv) {
+          await supabase.from('messages').upsert({
+            conversation_id: conv.id,
+            account_id: accountId,
+            remote_id: msg.key.id,
+            sender_id: msg.key.fromMe ? 'me' : remoteJid,
+            content,
+            is_from_me: !!msg.key.fromMe,
+            timestamp: new Date((msg.messageTimestamp || Date.now() / 1000) * 1000)
+          }, { onConflict: 'remote_id' });
+        }
       }
     }
   });

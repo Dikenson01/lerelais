@@ -219,6 +219,7 @@ function App() {
           <div className={`nav-item ${view === 'all' ? 'active' : ''}`} onClick={() => setView('all')}><LayoutGrid size={24} /></div>
           <div className={`nav-item ${view === 'whatsapp' ? 'active' : ''}`} onClick={() => setView('whatsapp')}><Smartphone size={24} /></div>
           <div className={`nav-item ${view === 'instagram' ? 'active' : ''}`} onClick={() => setView('instagram')}><Instagram size={24} /></div>
+          <div className={`nav-item ${view === 'contacts' ? 'active' : ''}`} onClick={() => setView('contacts')}><Users size={24} /></div>
           <div className={`nav-item ${view === 'settings' ? 'active' : ''}`} onClick={() => setView('settings')}><Settings size={24} /></div>
         </div>
         <div className="nav-add-btn" onClick={() => { setShowConnect(true); setConnectStep('select'); }}>
@@ -229,7 +230,7 @@ function App() {
       {/* Main Content Area */}
       <div className={`list-pane ${activeConv && isMobile ? 'hidden' : ''}`}>
         <header className="pane-header">
-          <h1>Hub</h1>
+          <h1>{view === 'contacts' ? 'Contacts' : (view === 'settings' ? 'Réglages' : 'Hub')}</h1>
           <div className="search-container">
             <Search size={16} />
             <input placeholder="Rechercher..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
@@ -237,7 +238,26 @@ function App() {
         </header>
 
         <div className="scroll-area">
-          {view === 'settings' ? (
+          {view === 'contacts' ? (
+            filteredContacts.length > 0 ? (
+              filteredContacts.map(c => (
+                <div key={c.id} className="conv-card" onClick={() => setSelectedContact(c)}>
+                  <div className="avatar-wrap">
+                    {c.avatar_url ? <img src={c.avatar_url} alt="" /> : (c.display_name?.[0] || '?')}
+                  </div>
+                  <div className="conv-info">
+                    <strong>{c.display_name}</strong>
+                    <p>{c.external_id?.split('@')[0]}</p>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="empty-state">
+                <Users size={32} />
+                <h3>Aucun contact</h3>
+              </div>
+            )
+          ) : view === 'settings' ? (
             <div style={{ padding: '20px' }}>
               <h3 style={{ fontSize: '12px', color: 'var(--dim-gray)', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '16px' }}>Comptes</h3>
               {accounts.map(acc => (
