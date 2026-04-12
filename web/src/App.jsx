@@ -145,188 +145,163 @@ function App() {
     if (!selectedContact) return null;
     const existing = conversations.find(c => c.contact_id === selectedContact.id);
     return (
-      <div className="modal-overlay" onClick={() => setSelectedContact(null)}>
-        <div className="profile-modal" onClick={e => e.stopPropagation()}>
+      <div className="modal-backdrop" onClick={() => setSelectedContact(null)}>
+        <div className="elite-modal" onClick={e => e.stopPropagation()}>
           <button className="close-btn" onClick={() => setSelectedContact(null)}><Plus style={{ transform: 'rotate(45deg)' }} /></button>
-          <div className="profile-hero">
-            <div className="avatar-large">
-              {selectedContact.avatar_url ? <img src={selectedContact.avatar_url} alt="" /> : (selectedContact.display_name?.[0] || '?')}
-            </div>
-            <h2>{selectedContact.display_name || 'Sans Nom'}</h2>
-            <div className="id-tag">@{selectedContact.external_id?.split('@')[0]}</div>
-          </div>
-          <div className="profile-actions">
-            <button className="primary-btn" onClick={() => {
+          <h2>{selectedContact.display_name || 'Sans Nom'}</h2>
+          <p>@{selectedContact.external_id?.split('@')[0]}</p>
+          <div className="platform-grid" style={{ marginTop: '20px' }}>
+            <button className="btn-primary" style={{ flex: 1 }} onClick={() => {
               if (existing) setActiveConv(existing);
               setView('all');
               setSelectedContact(null);
-            }}><MessageSquare size={18} /> Message</button>
-            <button className="secondary-btn" onClick={() => alert('Appel prochainement')}><Smartphone size={18} /> Appeler</button>
+            }}>Message</button>
           </div>
         </div>
       </div>
     );
   };
 
-  const filteredConvs = (conversations || []).filter(c => {
-    const title = (c.title || c.contacts?.display_name || '').toLowerCase();
-    const query = searchQuery.toLowerCase();
-    const matchesQuery = title.includes(query);
-    if (view === 'all') return matchesQuery;
-    return matchesQuery && c.platform === view;
-  });
-
-  const filteredContacts = (contacts || []).filter(c => (c.display_name || '').toLowerCase().includes(searchQuery.toLowerCase()));
-
   const ConnectModal = () => (
-    <div className="modal-overlay" onClick={() => setShowConnect(false)}>
-      <div className="modal-content" onClick={e => e.stopPropagation()}>
-        <button className="close-btn" onClick={() => setShowConnect(false)}><Plus style={{ transform: 'rotate(45deg)' }} /></button>
-        {connectStep === 'select' && (
-          <div className="step-select">
-            <h2>Nouveau Compte</h2>
-            <p style={{ color: 'var(--text-dim)', marginBottom: '24px' }}>Choisissez votre plateforme</p>
-            <div className="plat-grid">
-              <button onClick={startWhatsAppConnect} className="btn-wa">
-                <Smartphone size={24} /> WhatsApp
-              </button>
-              <button onClick={() => setConnectStep('ig_login')} className="btn-ig">
-                <Instagram size={24} /> Instagram
-              </button>
+    <div className="modal-backdrop" onClick={() => setShowConnect(false)}>
+      <div className="elite-modal" onClick={e => e.stopPropagation()}>
+        <button className="close-btn" style={{ position: 'absolute', top: '20px', right: '20px', background: 'transparent', border: 'none', color: 'var(--med-gray)', cursor: 'pointer' }} onClick={() => setShowConnect(false)}>
+          <Plus style={{ transform: 'rotate(45deg)' }} />
+        </button>
+        {connectStep === 'select' ? (
+          <>
+            <h2>Ajouter un compte</h2>
+            <p>Choisissez votre plateforme préférée.</p>
+            <div className="platform-grid">
+              <div className="platform-card wa" onClick={startWhatsAppConnect}>
+                <div className="icon"><Smartphone size={24} /></div>
+                <strong>WhatsApp</strong>
+              </div>
+              <div className="platform-card ig" onClick={() => setConnectStep('ig_login')}>
+                <div className="icon"><Instagram size={24} /></div>
+                <strong>Instagram</strong>
+              </div>
             </div>
-          </div>
-        )}
-        {connectStep === 'whatsapp_qr' && (
-          <div className="step-qr">
-            <h2>Scanner le QR Code</h2>
-            <div className="qr-box shadow-max" style={{ background: '#fff', padding: '15px', borderRadius: '20px', display: 'inline-block', marginTop: '20px' }}>
-              {waQr ? <img src={`https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(waQr)}`} alt="QR" style={{ display: 'block' }} /> : 'Génération...'}
+          </>
+        ) : connectStep === 'whatsapp_qr' ? (
+          <div style={{ textAlign: 'center' }}>
+            <h2>Scanner le QR</h2>
+            <div style={{ background: '#fff', padding: '16px', borderRadius: '16px', display: 'inline-block', marginTop: '16px' }}>
+              {waQr ? <img src={`https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(waQr)}`} alt="QR" /> : 'Chargement...'}
             </div>
-            <p style={{ marginTop: '20px', color: 'var(--text-dim)' }}>Ouvrez WhatsApp > Appareils connectés</p>
+            <p style={{ marginTop: '20px', color: 'var(--med-gray)' }}>Ouvrez WhatsApp > Appareils connectés</p>
           </div>
-        )}
-        {connectStep === 'ig_login' && (
-          <form className="step-ig" onSubmit={e => { e.preventDefault(); startInstagramConnect(); }}>
+        ) : (
+          <form onSubmit={e => { e.preventDefault(); startInstagramConnect(); }}>
             <h2>Instagram</h2>
-            <input placeholder="Utilisateur" value={igData.username} onChange={e => setIgData({...igData, username: e.target.value})} style={{ width: '100%', padding: '15px', borderRadius: '12px', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border)', color: '#fff', marginBottom: '10px' }} />
-            <input type="password" placeholder="Mot de passe" value={igData.password} onChange={e => setIgData({...igData, password: e.target.value})} style={{ width: '100%', padding: '15px', borderRadius: '12px', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border)', color: '#fff', marginBottom: '20px' }} />
-            <button type="submit" className="primary-btn" style={{ width: '100%' }}>Se connecter</button>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '20px' }}>
+              <input className="form-input" placeholder="Utilisateur" value={igData.username} onChange={e => setIgData({...igData, username: e.target.value})} />
+              <input className="form-input" type="password" placeholder="Mot de passe" value={igData.password} onChange={e => setIgData({...igData, password: e.target.value})} />
+              <button type="submit" className="btn-primary" style={{ width: '100%', marginTop: '12px' }}>Vérifier</button>
+            </div>
           </form>
         )}
       </div>
     </div>
   );
 
+  const filteredConvs = (conversations || []).filter(c => {
+    const title = (c.title || c.contacts?.display_name || '').toLowerCase();
+    const query = searchQuery.toLowerCase();
+    return title.includes(query) && (view === 'all' || c.platform === view);
+  });
+
   return (
-    <div className={`app-container ${isMobile ? 'is-mobile' : ''}`}>
-      {/* Sidebar Navigation */}
-      <nav className="nav-rail glass">
+    <div className="app-container">
+      {/* Elite Navigation Rail */}
+      <nav className="nav-rail">
         <div className="nav-top">
-          <button className={view === 'all' ? 'active' : ''} onClick={() => setView('all')}><LayoutGrid size={24} /></button>
-          <button className={view === 'contacts' ? 'active' : ''} onClick={() => setView('contacts')}><Users size={24} /></button>
-          <div className="nav-sep" />
-          <button className={view === 'whatsapp' ? 'active wa' : ''} onClick={() => setView('whatsapp')}><Smartphone size={24} /></button>
-          <button className={view === 'instagram' ? 'active ig' : ''} onClick={() => setView('instagram')}><Instagram size={24} /></button>
+          <div className={`nav-item ${view === 'all' ? 'active' : ''}`} onClick={() => setView('all')}><LayoutGrid size={24} /></div>
+          <div className={`nav-item ${view === 'whatsapp' ? 'active' : ''}`} onClick={() => setView('whatsapp')}><Smartphone size={24} /></div>
+          <div className={`nav-item ${view === 'instagram' ? 'active' : ''}`} onClick={() => setView('instagram')}><Instagram size={24} /></div>
         </div>
-        <button className={view === 'settings' ? 'active' : ''} onClick={() => setView('settings')}><Settings size={24} /></button>
+        <div className="nav-add-btn" onClick={() => { setShowConnect(true); setConnectStep('select'); }}>
+          <Plus size={24} />
+        </div>
       </nav>
 
-      {/* Main Content Areas */}
-      {view === 'settings' ? (
-        <main className="main-pane scrollable">
-          <div className="pane-header">
-            <h1>Paramètres</h1>
-            <button className="icon-btn" onClick={preloadData}><RefreshCw size={18} /></button>
+      {/* Main Content Area */}
+      <div className={`list-pane ${activeConv && isMobile ? 'hidden' : ''}`}>
+        <header className="pane-header">
+          <h1>Hub</h1>
+          <div className="search-container">
+            <Search size={16} />
+            <input placeholder="Rechercher..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
           </div>
-          <div className="settings-list">
-            <section className="settings-group">
-              <h3>Comptes Connectés</h3>
-              {accounts.map(acc => (
-                <div key={acc.id} className="acc-card glass">
-                  <div className="acc-info">
-                    <span className={`plat-tag ${acc.platform}`}>{acc.platform}</span>
-                    <strong>{acc.account_name || 'Chargement...'}</strong>
-                    <div className={`status ${acc.status}`}>{acc.status}</div>
-                  </div>
-                  <button onClick={() => disconnectAccount(acc.id)} className="logout-btn"><LogOut size={16} /></button>
+        </header>
+
+        <div className="scroll-area">
+          {filteredConvs.length > 0 ? (
+            filteredConvs.map(c => (
+              <div 
+                key={c.id} 
+                className={`conv-card ${activeConv?.id === c.id ? 'active' : ''}`}
+                onClick={() => { setActiveConv(c); if (isMobile) setIsMobileView(true); }}
+              >
+                <div className="avatar-wrap">
+                  {c.contacts?.avatar_url ? <img src={c.contacts.avatar_url} alt="" /> : (c.title?.[0] || '?')}
+                  <div className={`platform-dot ${c.platform}`} />
                 </div>
-              ))}
-              <button className="add-acc-btn" onClick={() => { setShowConnect(true); setConnectStep('select'); }}><Plus size={18} /> Connecter</button>
-            </section>
-            <section className="settings-group">
-              <button className="sync-all-btn" onClick={() => axios.post(`${API_BASE}/sync/all`).then(() => alert('Synchro lancée'))}>Forcer la Synchronisation</button>
-            </section>
-          </div>
-        </main>
-      ) : (
-        <>
-          <aside className={`list-pane ${activeConv && isMobile ? 'hide' : ''}`}>
-            <div className="pane-header">
-              <h1>{view === 'contacts' ? 'Contacts' : 'Hub'}</h1>
-              <div className="search-wrap">
-                <Search size={16} /><input placeholder="Rechercher..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
+                <div className="conv-info">
+                  <strong>{c.title || c.contacts?.display_name || 'Inconnu'}</strong>
+                  <p>{c.last_message_preview || 'Aucun message'}</p>
+                </div>
               </div>
-            </div>
-            <div className="item-list scrollable">
-              {view === 'contacts' ? (
-                filteredContacts.map(c => (
-                  <div key={c.id} className="item-card" onClick={() => setSelectedContact(c)}>
-                    <div className="ia-avatar">{c.avatar_url ? <img src={c.avatar_url} alt="" /> : (c.display_name?.[0] || '?')}</div>
-                    <div className="ia-info"><strong>{c.display_name}</strong><span>{c.external_id?.split('@')[0]}</span></div>
-                  </div>
-                ))
-              ) : (
-                filteredConvs.map(c => (
-                  <div key={c.id} className={`item-card ${activeConv?.id === c.id ? 'active' : ''}`} onClick={() => setActiveConv(c)}>
-                    <div className="ia-avatar">
-                      {c.contacts?.avatar_url ? <img src={c.contacts.avatar_url} alt="" /> : (c.title?.[0] || '?')}
-                      <div className={`ia-badge ${c.platform}`}>{c.platform === 'whatsapp' ? <Smartphone size={8} /> : <Instagram size={8} />}</div>
-                    </div>
-                    <div className="ia-info"><strong>{c.title || c.contacts?.display_name}</strong><p>{c.last_message_preview}</p></div>
-                  </div>
-                ))
+            ))
+          ) : (
+            <div className="empty-state">
+              <MessageSquare size={32} />
+              <h3>Aucun message</h3>
+              <p>Ajoutez un compte avec le bouton + pour commencer.</p>
+              {accounts.length > 0 && (
+                <div style={{ marginTop: '20px', display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'center' }}>
+                  {accounts.map(acc => (
+                    <div key={acc.id} className="status-pill" style={{ opacity: 0.5 }}>{acc.account_name}</div>
+                  ))}
+                </div>
               )}
             </div>
-          </aside>
+          )}
+        </div>
+      </div>
 
-          <main className={`chat-pane ${!activeConv && isMobile ? 'hide' : ''}`}>
-            {activeConv ? (
-              <div className="chat-box">
-                <header className="chat-head">
-                  {isMobile && <button onClick={() => setActiveConv(null)} className="back-btn"><Plus style={{ transform: 'rotate(45deg)' }} /></button>}
-                  <div className="head-avatar">{activeConv.contacts?.avatar_url ? <img src={activeConv.contacts.avatar_url} alt="" /> : (activeConv.title?.[0] || '?')}</div>
-                  <div className="head-info"><h3>{activeConv.title || activeConv.contacts?.display_name}</h3><div className="online"><span />En ligne</div></div>
-                </header>
-                <div className="msg-list scrollable">
-                  {messages.map(m => (
-                    <div key={m.id} className={`msg-wrap ${m.is_from_me ? 'is-me' : 'is-them'}`}>
-                      <div className="msg-bubble">{m.content}</div>
-                    </div>
-                  ))}
-                  <div ref={messagesEndRef} />
+      <main className={`chat-view ${!activeConv && isMobile ? 'hidden' : ''}`}>
+        {activeConv ? (
+          <>
+            <header className="chat-header">
+              {isMobile && <div className="nav-item" onClick={() => setActiveConv(null)}><Plus style={{ transform: 'rotate(45deg)' }} /></div>}
+              <h2>{activeConv.title || activeConv.contacts?.display_name}</h2>
+              <div className="status-pill">Direct</div>
+            </header>
+            
+            <div className="messages">
+              {messages.map(m => (
+                <div key={m.id} className={`message ${m.is_from_me ? 'me' : 'them'}`}>
+                  {m.content}
                 </div>
-                <div className="msg-input-wrap">
-                  <form onSubmit={e => { e.preventDefault(); sendMessage(); }}>
-                    <input placeholder="Répondre..." value={messageInput} onChange={e => setMessageInput(e.target.value)} />
-                    <button type="submit" disabled={!messageInput.trim()}><Send size={20} /></button>
-                  </form>
-                </div>
-              </div>
-            ) : (
-              <div className="chat-empty">
-                <div className="empty-icon glass" style={{ width: '80px', height: '80px', borderRadius: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.03)', marginBottom: '20px' }}><MessageSquare size={40} /></div>
-                <h3>Votre Centre Relais</h3>
-                <p>Vos messages WhatsApp et Instagram centralisés en un seul endroit.</p>
-                {accounts.length === 0 && (
-                  <button className="main-add-btn" onClick={() => { setShowConnect(true); setConnectStep('select'); }}>
-                    Connecter un compte
-                  </button>
-                )}
-              </div>
-            )}
-          </main>
-        </>
-      )}
+              ))}
+              <div ref={messagesEndRef} />
+            </div>
+
+            <div className="chat-footer">
+              <form className="input-box" onSubmit={e => { e.preventDefault(); sendMessage(); }}>
+                <input placeholder="Écrire un message..." value={messageInput} onChange={e => setMessageInput(e.target.value)} />
+                <button type="submit" className="send-btn" disabled={!messageInput.trim()}>Envoyer</button>
+              </form>
+            </div>
+          </>
+        ) : (
+          <div className="empty-state">
+            <LayoutGrid size={48} style={{ opacity: 0.1 }} />
+            <h3>Sélectionnez un échange</h3>
+          </div>
+        )}
+      </main>
 
       {showConnect && <ConnectModal />}
       {selectedContact && <ProfileModal />}
