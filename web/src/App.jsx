@@ -169,6 +169,35 @@ function App() {
     } catch (err) { alert('Erreur Instagram'); setConnectStep('instagram_login'); }
   };
 
+  const ContactProfileModal = () => {
+    if (!selectedContact) return null;
+    return (
+      <div className="modal-overlay glass" onClick={() => setSelectedContact(null)}>
+        <motion.div initial={{ y: 50, opacity: 0 }} animate={{ y: 0, opacity: 1 }} className="profile-modal" onClick={e => e.stopPropagation()}>
+          <button className="close-profile" onClick={() => setSelectedContact(null)}><Plus size={24} style={{ transform: 'rotate(45deg)' }} /></button>
+          <div className="profile-header">
+            <div className="profile-avatar">
+              {selectedContact.avatar_url ? <img src={selectedContact.avatar_url} alt="" /> : selectedContact.display_name?.[0]}
+            </div>
+            <h2>{selectedContact.display_name}</h2>
+            <div className="id-badge">{selectedContact.external_id?.split('@')[0]}</div>
+          </div>
+          <div className="profile-actions">
+            <button className="msg-btn" onClick={() => {
+              const existing = conversations.find(c => c.contact_id === selectedContact.id);
+              if (existing) setActiveConv(existing);
+              setView('all');
+              setSelectedContact(null);
+            }}>
+              <MessageSquare size={18} /> Message
+            </button>
+            <button className="call-btn"><Smartphone size={18} /> Appeler</button>
+          </div>
+        </motion.div>
+      </div>
+    );
+  };
+
   const ConnectModal = () => (
     <div className="modal-overlay glass" onClick={() => setShowConnect(false)}>
       <motion.div 
@@ -302,13 +331,7 @@ function App() {
             <div className="conversation-list scrollbar">
               {view === 'contacts' ? (
                 filteredContacts.map(contact => (
-                  <div key={contact.id} className="conv-card" onClick={() => {
-                    const existing = conversations.find(c => c.contact_id === contact.id);
-                    if (existing) {
-                      setActiveConv(existing);
-                      if (isMobile) setShowChat(true);
-                    }
-                  }}>
+                  <div key={contact.id} className="conv-card" onClick={() => setSelectedContact(contact)}>
                     <div className="avatar-stack">
                       <div className="main-avatar">{contact.avatar_url ? <img src={contact.avatar_url} alt="" /> : contact.display_name?.[0]}</div>
                     </div>
@@ -380,6 +403,7 @@ function App() {
         </>
       )}
       {showConnect && <ConnectModal />}
+      {selectedContact && <ContactProfileModal />}
     </div>
   );
 }

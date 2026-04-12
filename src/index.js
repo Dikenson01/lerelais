@@ -131,15 +131,27 @@ app.post('/api/messages', async (req, res) => {
   }
 });
 
-app.get('/api/contacts', async (req, res) => {
+app.post('/api/contacts/:id/rename', async (req, res) => {
+  const { id } = req.params;
+  const { name } = req.body;
   try {
-    const { data, error } = await supabase
+    const { data: contact, error } = await supabase
       .from('contacts')
-      .select('*')
-      .order('display_name', { ascending: true });
+      .update({ display_name: name })
+      .eq('id', id)
+      .select().single();
     
     if (error) throw error;
-    res.json(data);
+
+    // Sync back to WhatsApp if connector is active
+    const sock = activeConnectors[contact.account_id];
+    if (sock) {
+      // In Baileys, we can notify about the update (though sync to phone address book is limited)
+      sock.ev.emit('contacts.update', [{ id: contact.external_id, name }]);
+      logger.info(`🔄 Pushed name update for ${contact.external_id} to connector`);
+    }
+
+    res.json(contact);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
