@@ -681,7 +681,32 @@
   transition: all 0.2s;
 }
 
-.connect-now:hover { background: #35373c; border-color: #5865f2; }
+.refresh-btn {
+  background: rgba(255, 255, 255, 0.1);
+  border: none;
+  border-radius: 8px;
+  color: #fff;
+  padding: 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+
+.refresh-btn:hover { background: rgba(255, 255, 255, 0.2); }
+
+.empty-msg {
+  text-align: center;
+  color: #8e9297;
+  padding: 20px;
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 12px;
+  font-size: 14px;
+}
+
+.account-info .platform.whatsapp { color: #23a55a; }
+.account-info .platform.instagram { color: #e1306c; }
 
 .settings-pane {
   flex: 1;

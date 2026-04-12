@@ -245,22 +245,36 @@ function App() {
       
       {view === 'settings' ? (
         <main className="settings-pane scrollbar">
-          <header className="pane-header"><h1>Paramètres</h1></header>
+          <header className="pane-header">
+            <div className="title-row">
+              <h1>Paramètres</h1>
+              <button className="refresh-btn" onClick={fetchAccountsList} title="Actualiser">
+                <Activity size={18} />
+              </button>
+            </div>
+          </header>
           <div className="settings-content">
             <section className="settings-section">
               <h2>Comptes</h2>
               <div className="account-list">
-                {accounts.map(acc => (
-                  <div key={acc.id} className="account-card glass">
-                    <div className="account-info">
-                      <span className="platform">{acc.platform}</span>
-                      <strong>{acc.username || acc.platform}</strong>
+                {accounts.length > 0 ? (
+                  accounts.map(acc => (
+                    <div key={acc.id} className="account-card glass">
+                      <div className="account-info">
+                        <span className={`platform ${acc.platform}`}>{acc.platform}</span>
+                        <strong>{acc.username || (acc.platform === 'whatsapp' ? 'Compte WhatsApp' : 'Compte Instagram')}</strong>
+                        <span className={`status-pill ${acc.status}`}>{acc.status === 'connected' ? 'En ligne' : 'Appairage...'}</span>
+                      </div>
+                      <button className="disconnect-btn" onClick={() => disconnectAccount(acc.id)}>Déconnecter</button>
                     </div>
-                    <button className="disconnect-btn" onClick={() => disconnectAccount(acc.id)}>Déconnecter</button>
-                  </div>
-                ))}
+                  ))
+                ) : (
+                  <p className="empty-msg">Aucun compte détecté. Cliquez sur le bouton ci-dessous pour commencer.</p>
+                )}
               </div>
-              <button className="add-account-btn" onClick={() => { setShowConnect(true); setConnectStep('select'); }}>Ajouter un compte</button>
+              <button className="add-account-btn" onClick={() => { setShowConnect(true); setConnectStep('select'); }}>
+                <Plus size={18} /> Ajouter un compte
+              </button>
             </section>
           </div>
         </main>
