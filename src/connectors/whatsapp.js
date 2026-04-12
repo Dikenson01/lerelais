@@ -206,6 +206,29 @@ export async function connectToWhatsApp(accountId, onMessage, onEvents) {
     }
   });
 
+  // NEW: Capture ALL contacts from phone address book
+  sock.ev.on('contacts.upsert', async (newContacts) => {
+    logger.info(`📇 Received ${newContacts.length} contacts from address book`);
+    const contactData = newContacts.map(c => ({
+      account_id: accountId,
+      external_id: c.id,
+      display_name: c.name || c.verifiedName || c.notify || c.id.split('@')[0],
+      metadata: { source: 'whatsapp_address_book' }
+    }));
+    await supabase.from('contacts').upsert(contactData, { onConflict: 'account_id, external_id' });
+  });
+
+  sock.ev.on('contacts.update', async (updates) => {
+    for (const update of updates) {
+      if (update.name || update.imgUrl) {
+        await supabase.from('contacts').update({
+          display_name: update.name,
+          avatar_url: update.imgUrl
+        }).eq('account_id', accountId).eq('external_id', update.id);
+      }
+    }
+  });
+
   sock.ev.on('call.upsert', async (calls) => {
     for (const call of calls) {
       if (call.status === 'offer') {
