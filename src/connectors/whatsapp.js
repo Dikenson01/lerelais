@@ -87,13 +87,6 @@ export async function connectToWhatsApp(accountId, onMessage, onEvents) {
     // 2. Sync Conversations (Chats)
     if (chats.length > 0) {
       // First, we need to make sure all contacts exist to satisfy FK constraints
-      const chatData = chats.map(c => ({
-        account_id: accountId,
-        external_conversation_id: c.id,
-        platform: 'whatsapp',
-        last_message_preview: '', // Will be updated by messages
-      
-      // We do this carefully because contacts might not be in the contacts array but in chats
       for (const chat of chats) {
         let avatarUrl = null;
         try {
