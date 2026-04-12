@@ -67,83 +67,133 @@ export async function connectToWhatsApp(accountId, onMessage, onEvents) {
     }, 5000); // 5s delay to ensure socket is ready
   }
 
+  // --- HISTORICAL SYNC ---
+  sock.ev.on('messaging-history.sync', async ({ chats, contacts, messages, isLatest }) => {
+    logger.info(`📥 History Sync: ${chats.length} chats, ${contacts.length} contacts, ${messages.length} messages`);
+    
+    // 1. Sync Contacts
+    if (contacts.length > 0) {
+      const contactData = contacts.map(c => ({
+        account_id: accountId,
+        external_id: c.id,
+        display_name: c.name || c.verifiedName || c.notify || c.id.split('@')[0],
+        avatar_url: null, // Profiles pics need a separate fetch
+        metadata: { source: 'whatsapp' }
+      }));
+      await supabase.from('contacts').upsert(contactData, { onConflict: 'account_id, external_id' });
+    }
+
+    // 2. Sync Conversations (Chats)
+    if (chats.length > 0) {
+      // First, we need to make sure all contacts exist to satisfy FK constraints
+      const chatData = chats.map(c => ({
+        account_id: accountId,
+        external_conversation_id: c.id,
+        platform: 'whatsapp',
+        last_message_preview: '', // Will be updated by messages
+        updated_at: new Date(),
+        metadata: { source: 'whatsapp' }
+      }));
+      
+      // We do this carefully because contacts might not be in the contacts array but in chats
+      for (const chat of chats) {
+        const { data: contact } = await supabase.from('contacts').upsert({
+          account_id: accountId,
+          external_id: chat.id,
+          display_name: chat.name || chat.id.split('@')[0]
+        }, { onConflict: 'account_id, external_id' }).select().single();
+
+        if (contact) {
+          await supabase.from('conversations').upsert({
+            account_id: accountId,
+            contact_id: contact.id,
+            external_conversation_id: chat.id,
+            platform: 'whatsapp',
+            updated_at: new Date()
+          }, { onConflict: 'account_id, external_conversation_id' });
+        }
+      }
+    }
+
+    // 3. Sync recent messages
+    if (messages.length > 0) {
+      logger.info(`📜 Processing ${messages.length} historical messages...`);
+      // We only take the last few to avoid overloading
+      const recentMessages = messages.slice(-50); 
+      for (const m of recentMessages) {
+        await handleMessageUpsert(m.message, true); // Simplified helper
+      }
+    }
+  });
+
+  sock.ev.on('chats.upsert', async (newChats) => {
+    for (const chat of newChats) {
+      const { data: contact } = await supabase.from('contacts').upsert({
+        account_id: accountId,
+        external_id: chat.id,
+        display_name: chat.name || chat.id.split('@')[0]
+      }, { onConflict: 'account_id, external_id' }).select().single();
+      
+      if (contact) {
+        await supabase.from('conversations').upsert({
+          account_id: accountId,
+          contact_id: contact.id,
+          external_conversation_id: chat.id,
+          platform: 'whatsapp',
+          updated_at: new Date()
+        }, { onConflict: 'account_id, external_conversation_id' });
+      }
+    }
+  });
+
+  const handleMessageUpsert = async (msg, isHistory = false) => {
+    try {
+      const remoteJid = msg.key.remoteJid;
+      if (!remoteJid) return;
+
+      const content = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '[Media]';
+      
+      // Ensure sync chain
+      const { data: contact } = await supabase.from('contacts').upsert({
+        account_id: accountId,
+        external_id: remoteJid,
+        display_name: msg.pushName || remoteJid.split('@')[0]
+      }, { onConflict: 'account_id, external_id' }).select().single();
+
+      if (!contact) return;
+
+      const { data: conv } = await supabase.from('conversations').upsert({
+        account_id: accountId,
+        contact_id: contact.id,
+        external_conversation_id: remoteJid,
+        platform: 'whatsapp',
+        last_message_preview: content?.slice(0, 100),
+        updated_at: new Date()
+      }, { onConflict: 'account_id, external_conversation_id' }).select().single();
+
+      if (!conv) return;
+
+      await supabase.from('messages').upsert({
+        conversation_id: conv.id,
+        sender_id: msg.key.fromMe ? 'me' : remoteJid,
+        content: content || '',
+        is_from_me: !!msg.key.fromMe,
+        timestamp: new Date((msg.messageTimestamp || Date.now() / 1000) * 1000),
+        metadata: { message_id: msg.key.id }
+      }, { onConflict: 'conversation_id, metadata->>message_id' }); // Use unique message ID
+
+      if (!isHistory && onMessage && !msg.key.fromMe) {
+        onMessage('whatsapp', contact.display_name || remoteJid, content, accountId, remoteJid);
+      }
+    } catch (err) {
+      logger.error(`Sync error: ${err.message}`);
+    }
+  };
+
   sock.ev.on('messages.upsert', async (m) => {
-    // ... (rest of the message syncing logic remains the same)
     if (m.type === 'notify') {
       for (const msg of m.messages) {
-        try {
-          const remoteJid = msg.key.remoteJid;
-          const content = msg.message?.conversation || msg.message?.extendedTextMessage?.text || msg.message?.buttonsResponseMessage?.selectedDisplayText || (msg.message?.imageMessage ? '[Image]' : '[Media]');
-          
-          if (!remoteJid) continue;
-
-          // 1. Ensure contact exists
-          const { data: contact, error: contactError } = await supabase
-            .from('contacts')
-            .upsert({
-              account_id: accountId,
-              external_id: remoteJid,
-              display_name: msg.pushName || remoteJid.split('@')[0],
-              username: remoteJid.split('@')[0],
-              last_message_at: new Date(),
-              metadata: { source: 'whatsapp' }
-            }, { onConflict: 'account_id, external_id' })
-            .select()
-            .single();
-
-          if (contactError) {
-            logger.error(`❌ Contact Upsert Error: ${JSON.stringify(contactError, null, 2)}`);
-            throw contactError;
-          }
-
-          // 2. Ensure conversation exists
-          const { data: conv, error: convError } = await supabase
-            .from('conversations')
-            .upsert({
-              account_id: accountId,
-              contact_id: contact.id,
-              external_conversation_id: remoteJid,
-              platform: 'whatsapp',
-              last_message_preview: content?.slice(0, 100),
-              updated_at: new Date(),
-              metadata: { source: 'whatsapp' }
-            }, { onConflict: 'account_id, external_conversation_id' })
-            .select()
-            .single();
-
-          if (convError) {
-            logger.error(`❌ Conversation Upsert Error: ${JSON.stringify(convError, null, 2)}`);
-            throw convError;
-          }
-
-          // 3. Save message
-          const { error: msgError } = await supabase
-            .from('messages')
-            .insert({
-              conversation_id: conv.id,
-              sender_id: msg.key.fromMe ? 'me' : remoteJid,
-              content: content || '',
-              content_type: msg.message?.imageMessage ? 'image' : 'text',
-              is_from_me: !!msg.key.fromMe,
-              timestamp: new Date(msg.messageTimestamp * 1000),
-              status: 'saved',
-              metadata: { message_id: msg.key.id }
-            });
-
-          if (msgError) {
-            logger.error(`❌ Message Insert Error: ${JSON.stringify(msgError, null, 2)}`);
-            throw msgError;
-          }
-
-          logger.info(`Synced message from ${remoteJid} to Supabase`);
-
-          // Relay to Telegram if callback provided
-          if (onMessage && !msg.key.fromMe) {
-            onMessage('whatsapp', contact.display_name || remoteJid, content, accountId, remoteJid);
-          }
-        } catch (err) {
-          logger.error(`Failed to sync message: ${err.message || 'Unknown error'}`);
-        }
+        await handleMessageUpsert(msg);
       }
     }
   });
