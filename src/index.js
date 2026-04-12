@@ -189,6 +189,30 @@ app.get('/api/connect/whatsapp/qr/:id', (req, res) => {
   res.json({ qr: qr || null });
 });
 
+app.get('/api/accounts', async (req, res) => {
+  try {
+    const { data: accounts, error } = await supabase.from('accounts').select('*');
+    if (error) throw error;
+    res.json(accounts);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/accounts/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await supabase.from('accounts').delete().eq('id', id);
+    if (activeConnectors[id]) {
+      // Logic to actually disconnect the socket could go here
+      delete activeConnectors[id];
+    }
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/connect/instagram', async (req, res) => {
   const { username, password } = req.body;
   const accountId = crypto.randomUUID();
