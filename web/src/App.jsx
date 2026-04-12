@@ -200,7 +200,11 @@ function App() {
               >
                 <div className="avatar-stack">
                   <div className="main-avatar">
-                    {conv.contacts?.display_name?.[0] || '?'}
+                    {conv.contacts?.avatar_url ? (
+                      <img src={conv.contacts.avatar_url} alt="" />
+                    ) : (
+                      conv.contacts?.display_name?.[0] || '?'
+                    )}
                   </div>
                   <div className={`platform-pip ${conv.platform}`}>
                     {conv.platform === 'whatsapp' ? <Smartphone size={8} /> : <Instagram size={8} />}
@@ -241,7 +245,13 @@ function App() {
                       <Plus size={24} style={{ transform: 'rotate(45deg)' }} />
                     </button>
                   )}
-                  <div className="header-avatar">{activeConv.contacts?.display_name?.[0]}</div>
+                  <div className="header-avatar">
+                    {activeConv.contacts?.avatar_url ? (
+                      <img src={activeConv.contacts.avatar_url} alt="" />
+                    ) : (
+                      activeConv.contacts?.display_name?.[0]
+                    )}
+                  </div>
                   <div className="header-text">
                     <h2>{activeConv.title || activeConv.contacts?.display_name}</h2>
                     <div className="online-indicator">

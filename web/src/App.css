@@ -177,6 +177,13 @@
   font-weight: 600;
   font-size: 16px;
   border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.main-avatar img, .header-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .platform-pip {

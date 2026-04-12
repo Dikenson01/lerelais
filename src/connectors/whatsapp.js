@@ -2,7 +2,8 @@ import makeWASocket, {
   DisconnectReason, 
   useMultiFileAuthState, 
   fetchLatestBaileysVersion,
-  Browsers
+  Browsers,
+  downloadMediaMessage
 } from '@whiskeysockets/baileys';
 import logger from '../utils/logger.js';
 import supabase from '../config/supabase.js';
@@ -91,16 +92,19 @@ export async function connectToWhatsApp(accountId, onMessage, onEvents) {
         external_conversation_id: c.id,
         platform: 'whatsapp',
         last_message_preview: '', // Will be updated by messages
-        updated_at: new Date(),
-        metadata: { source: 'whatsapp' }
-      }));
       
       // We do this carefully because contacts might not be in the contacts array but in chats
       for (const chat of chats) {
+        let avatarUrl = null;
+        try {
+          avatarUrl = await sock.profilePictureUrl(chat.id, 'image').catch(() => null);
+        } catch (e) {}
+
         const { data: contact } = await supabase.from('contacts').upsert({
           account_id: accountId,
           external_id: chat.id,
-          display_name: chat.name || chat.id.split('@')[0]
+          display_name: chat.name || chat.id.split('@')[0],
+          avatar_url: avatarUrl
         }, { onConflict: 'account_id, external_id' }).select().single();
 
         if (contact) {
@@ -128,10 +132,16 @@ export async function connectToWhatsApp(accountId, onMessage, onEvents) {
 
   sock.ev.on('chats.upsert', async (newChats) => {
     for (const chat of newChats) {
+      let avatarUrl = null;
+      try {
+        avatarUrl = await sock.profilePictureUrl(chat.id, 'image').catch(() => null);
+      } catch (e) {}
+
       const { data: contact } = await supabase.from('contacts').upsert({
         account_id: accountId,
         external_id: chat.id,
-        display_name: chat.name || chat.id.split('@')[0]
+        display_name: chat.name || chat.id.split('@')[0],
+        avatar_url: avatarUrl
       }, { onConflict: 'account_id, external_id' }).select().single();
       
       if (contact) {
@@ -151,13 +161,18 @@ export async function connectToWhatsApp(accountId, onMessage, onEvents) {
       const remoteJid = msg.key.remoteJid;
       if (!remoteJid) return;
 
-      const content = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '[Media]';
+      const content = msg.message?.conversation || msg.message?.extendedTextMessage?.text || (msg.message?.imageMessage ? '[Image]' : '[Media]');
       
-      // Ensure sync chain
+      let avatarUrl = null;
+      try {
+        avatarUrl = await sock.profilePictureUrl(remoteJid, 'image').catch(() => null);
+      } catch (e) {}
+
       const { data: contact } = await supabase.from('contacts').upsert({
         account_id: accountId,
         external_id: remoteJid,
-        display_name: msg.pushName || remoteJid.split('@')[0]
+        display_name: msg.pushName || remoteJid.split('@')[0],
+        avatar_url: avatarUrl
       }, { onConflict: 'account_id, external_id' }).select().single();
 
       if (!contact) return;
@@ -194,6 +209,15 @@ export async function connectToWhatsApp(accountId, onMessage, onEvents) {
     if (m.type === 'notify') {
       for (const msg of m.messages) {
         await handleMessageUpsert(msg);
+      }
+    }
+  });
+
+  sock.ev.on('call.upsert', async (calls) => {
+    for (const call of calls) {
+      if (call.status === 'offer') {
+        const from = call.from.split('@')[0];
+        onMessage('whatsapp', from, `📞 Appel ${call.isVideo ? 'Vidéo' : 'Audio'} entrant...`, accountId, call.from);
       }
     }
   });
