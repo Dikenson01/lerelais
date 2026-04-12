@@ -32,13 +32,24 @@ app.get('/api/health', (req, res) => res.json({ status: 'ok', time: new Date() }
 
 app.get('/api/accounts', async (req, res) => {
   const { data, error } = await supabase.from('accounts').select('*');
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data || []);
+  if (error) {
+    logger.error('DB Error /api/accounts:', error);
+    return res.status(500).json({ error: error.message });
+  }
+  // Map 'username' to 'account_name' if needed for frontend
+  const mapped = (data || []).map(a => ({ ...a, account_name: a.username || (a.platform === 'whatsapp' ? 'WhatsApp' : 'Instagram') }));
+  res.json(mapped);
 });
 
 app.get('/api/conversations', async (req, res) => {
-  const { data, error } = await supabase.from('conversations').select('*, contacts(*)').order('updated_at', { ascending: false });
-  if (error) return res.status(500).json({ error: error.message });
+  // Simple select first to avoid join errors if relations aren't perfect
+  const { data, error } = await supabase.from('conversations').select('*').order('updated_at', { ascending: false });
+  if (error) {
+    logger.error('DB Error /api/conversations:', error);
+    return res.status(500).json({ error: error.message });
+  }
+  
+  // Try to enrich with contacts manually or just send as is for now to unblock
   res.json(data || []);
 });
 
