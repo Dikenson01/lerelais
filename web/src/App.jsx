@@ -19,7 +19,9 @@ import {
 } from 'lucide-react';
 import './App.css';
 
-const API_BASE = 'http://localhost:3000/api';
+const API_BASE = (window.Telegram?.WebApp && window.location.hostname !== 'localhost') 
+  ? '/api' 
+  : `http://${window.location.hostname}:3000/api`;
 
 function App() {
   const [conversations, setConversations] = useState([]);
@@ -29,9 +31,14 @@ function App() {
   const [view, setView] = useState('all');
   const [tgUser, setTgUser] = useState(null);
   const [messageInput, setMessageInput] = useState('');
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  const [showChat, setShowChat] = useState(false);
   const messagesEndRef = useRef(null);
 
   useEffect(() => {
+    const handleResize = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener('resize', handleResize);
+    
     if (window.Telegram?.WebApp) {
       const tg = window.Telegram.WebApp;
       tg.ready();
@@ -43,16 +50,22 @@ function App() {
     
     fetchConversations();
     const interval = setInterval(fetchConversations, 5000);
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('resize', handleResize);
+    };
   }, []);
 
   useEffect(() => {
     if (activeConv) {
       fetchMessages(activeConv.id);
+      if (isMobile) setShowChat(true);
       const interval = setInterval(() => fetchMessages(activeConv.id), 3000);
       return () => clearInterval(interval);
+    } else {
+      setShowChat(false);
     }
-  }, [activeConv]);
+  }, [activeConv, isMobile]);
 
   useEffect(() => {
     scrollToBottom();
@@ -86,7 +99,6 @@ function App() {
     const content = messageInput;
     setMessageInput('');
     
-    // Optimistic update
     const tempId = crypto.randomUUID();
     const optimisticMsg = {
       id: tempId,
@@ -115,41 +127,50 @@ function App() {
     return matchesSearch && c.platform === view;
   });
 
-  return (
-    <div className="app-layout">
-      {/* --- 1. LEFT RAIL (PLATFORMS) --- */}
-      <nav className="rail glass">
-        <div className="rail-top">
-          <div className="logo-icon">LR</div>
-          <div className="rail-items">
-            <button className={view === 'all' ? 'active' : ''} onClick={() => setView('all')}>
-              <LayoutGrid size={20} />
-              <span className="tooltip">Toutes les vues</span>
+  const Navigation = () => (
+    <nav className={`rail glass ${isMobile ? 'bottom-bar' : ''}`}>
+      <div className="rail-top">
+        {!isMobile && <div className="logo-icon">LR</div>}
+        <div className="rail-items">
+          <button className={view === 'all' ? 'active' : ''} onClick={() => setView('all')}>
+            <LayoutGrid size={isMobile ? 24 : 20} />
+            {!isMobile && <span className="tooltip">Toutes</span>}
+          </button>
+          {!isMobile && <div className="separator" />}
+          <button className={view === 'whatsapp' ? 'active whatsapp' : ''} onClick={() => setView('whatsapp')}>
+            <Smartphone size={isMobile ? 24 : 20} />
+          </button>
+          <button className={view === 'instagram' ? 'active instagram' : ''} onClick={() => setView('instagram')}>
+            <Instagram size={isMobile ? 24 : 20} />
+          </button>
+          {isMobile && (
+            <button className={view === 'settings' ? 'active' : ''} onClick={() => setView('settings')}>
+              <Settings size={24} />
             </button>
-            <div className="separator" />
-            <button className={view === 'whatsapp' ? 'active whatsapp' : ''} onClick={() => setView('whatsapp')}>
-              <Smartphone size={20} />
-            </button>
-            <button className={view === 'instagram' ? 'active instagram' : ''} onClick={() => setView('instagram')}>
-              <Instagram size={20} />
-            </button>
+          )}
+          {!isMobile && (
             <button className="add-btn">
               <Plus size={20} />
             </button>
-          </div>
+          )}
         </div>
+      </div>
+      {!isMobile && (
         <div className="rail-bottom">
-          <button className="status-btn">
-            <Activity size={20} />
-          </button>
-          <button className="settings-btn">
-            <Settings size={20} />
-          </button>
+          <button className="status-btn"><Activity size={20} /></button>
+          <button className="settings-btn"><Settings size={20} /></button>
         </div>
-      </nav>
+      )}
+    </nav>
+  );
 
-      {/* --- 2. THREAD LIST --- */}
-      <aside className="thread-pane">
+  return (
+    <div className={`app-layout ${isMobile ? 'mobile' : ''}`}>
+      {/* Sidebar Rail (or Bottom bar) */}
+      <Navigation />
+
+      {/* Thread List Pane */}
+      <aside className={`thread-pane ${(isMobile && showChat) ? 'hidden' : ''}`}>
         <header className="pane-header">
           <div className="title-row">
             <h1>Inbox</h1>
@@ -201,19 +222,25 @@ function App() {
         </div>
       </aside>
 
-      {/* --- 3. CHAT WINDOW --- */}
-      <main className="chat-pane">
+      {/* Chat Window Pane */}
+      <main className={`chat-pane ${(isMobile && !showChat) ? 'hidden' : ''}`}>
         <AnimatePresence mode="wait">
           {activeConv ? (
             <motion.div 
               key={activeConv.id}
-              initial={{ opacity: 0, x: 20 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -20 }}
+              initial={isMobile ? { x: '100%' } : { opacity: 0, x: 20 }}
+              animate={{ x: 0, opacity: 1 }}
+              exit={isMobile ? { x: '100%' } : { opacity: 0, x: -20 }}
+              transition={{ type: 'spring', damping: 25, stiffness: 200 }}
               className="chat-content"
             >
               <header className="chat-header glass">
                 <div className="header-identity">
+                  {isMobile && (
+                    <button className="back-btn" onClick={() => setShowChat(false)}>
+                      <Plus size={24} style={{ transform: 'rotate(45deg)' }} />
+                    </button>
+                  )}
                   <div className="header-avatar">{activeConv.contacts?.display_name?.[0]}</div>
                   <div className="header-text">
                     <h2>{activeConv.title || activeConv.contacts?.display_name}</h2>
@@ -224,7 +251,7 @@ function App() {
                   </div>
                 </div>
                 <div className="header-actions">
-                  <button><Search size={18} /></button>
+                  {!isMobile && <button><Search size={18} /></button>}
                   <button><MoreVertical size={18} /></button>
                 </div>
               </header>
@@ -254,7 +281,7 @@ function App() {
                   <button type="button" className="attach-btn"><Paperclip size={20} /></button>
                   <input 
                     type="text" 
-                    placeholder={`Répondre à ${activeConv.contacts?.display_name}...`} 
+                    placeholder="Répondre..." 
                     value={messageInput}
                     onChange={(e) => setMessageInput(e.target.value)}
                   />
@@ -264,15 +291,13 @@ function App() {
                 </form>
               </footer>
             </motion.div>
-          ) : (
+          ) : !isMobile && (
             <motion.div 
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               className="empty-state"
             >
-              <div className="empty-illust">
-                <MessageSquare size={48} />
-              </div>
+              <div className="empty-illust"><MessageSquare size={48} /></div>
               <h3>Sélectionnez une conversation</h3>
               <p>Tous vos messages WhatsApp et Instagram sont centralisés ici.</p>
             </motion.div>
