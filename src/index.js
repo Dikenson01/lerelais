@@ -111,6 +111,9 @@ app.post('/api/sync/all', async (req, res) => {
 const qrMap = new Map();
 
 app.post('/api/connect/whatsapp', async (req, res) => {
+  // Prevent ghosting: delete old pairing attempts first
+  await supabase.from('accounts').delete().eq('platform', 'whatsapp').eq('status', 'pairing');
+  
   const accountId = crypto.randomUUID();
   await supabase.from('accounts').insert({ id: accountId, platform: 'whatsapp', status: 'pairing' });
   const sock = await connectToWhatsApp(accountId, (p, f, c, aid, eid) => relayToTelegram(p, f, c, aid, eid), {
@@ -162,7 +165,18 @@ app.use((req, res, next) => {
 
 // --- LIFECYCLE ---
 
+async function cleanupStaleAccounts() {
+  const thirtyMinsAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+  const { data: stale } = await supabase
+    .from('accounts')
+    .delete()
+    .eq('status', 'pairing')
+    .lt('created_at', thirtyMinsAgo);
+  if (stale) logger.info(`🧹 Cleaned up stale pairing sessions`);
+}
+
 async function restoreConnectors() {
+  await cleanupStaleAccounts();
   const { count: accCount } = await supabase.from('accounts').select('*', { count: 'exact', head: true });
   const { count: convCount } = await supabase.from('conversations').select('*', { count: 'exact', head: true });
   logger.info(`🔍 Startup DB Check: ${accCount || 0} accounts, ${convCount || 0} conversations in DB`);
@@ -172,7 +186,8 @@ async function restoreConnectors() {
     logger.info(`🔄 Attempting to restore ${accounts.length} active connectors...`);
     for (const acc of accounts) {
       if (acc.platform === 'whatsapp') {
-        activeConnectors[acc.id] = await connectToWhatsApp(acc.id, (p, f, c, aid, eid) => relayToTelegram(p, f, c, aid, eid));
+        const sock = await connectToWhatsApp(acc.id, (p, f, c, aid, eid) => relayToTelegram(p, f, c, aid, eid));
+        activeConnectors[acc.id] = sock;
       }
     }
   }
