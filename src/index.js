@@ -359,7 +359,7 @@ async function setupMenuButton() {
 
 // Serve index.html for any unknown routes (SPA support) - Production only
 if (process.env.NODE_ENV === 'production') {
-  app.get('/:path*', (req, res, next) => {
+  app.use((req, res, next) => {
     if (req.path.startsWith('/api')) return next();
     res.sendFile(path.join(distPath, 'index.html'));
   });
