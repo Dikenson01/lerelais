@@ -33,23 +33,20 @@ app.get('/api/health', (req, res) => res.json({ status: 'ok', time: new Date() }
 app.get('/api/accounts', async (req, res) => {
   const { data, error } = await supabase.from('accounts').select('*');
   if (error) {
-    logger.error('DB Error /api/accounts:', error);
+    logger.error('CRITICAL DB ERROR /api/accounts:', JSON.stringify(error, null, 2));
     return res.status(500).json({ error: error.message });
   }
-  // Map 'username' to 'account_name' if needed for frontend
   const mapped = (data || []).map(a => ({ ...a, account_name: a.username || (a.platform === 'whatsapp' ? 'WhatsApp' : 'Instagram') }));
   res.json(mapped);
 });
 
 app.get('/api/conversations', async (req, res) => {
-  // Simple select first to avoid join errors if relations aren't perfect
-  const { data, error } = await supabase.from('conversations').select('*').order('updated_at', { ascending: false });
+  // Ultra-simple select first to diagnose
+  const { data, error } = await supabase.from('conversations').select('*');
   if (error) {
-    logger.error('DB Error /api/conversations:', error);
+    logger.error('CRITICAL DB ERROR /api/conversations:', JSON.stringify(error, null, 2));
     return res.status(500).json({ error: error.message });
   }
-  
-  // Try to enrich with contacts manually or just send as is for now to unblock
   res.json(data || []);
 });
 
@@ -166,8 +163,13 @@ app.use((req, res, next) => {
 // --- LIFECYCLE ---
 
 async function restoreConnectors() {
+  const { count: accCount } = await supabase.from('accounts').select('*', { count: 'exact', head: true });
+  const { count: convCount } = await supabase.from('conversations').select('*', { count: 'exact', head: true });
+  logger.info(`🔍 Startup DB Check: ${accCount || 0} accounts, ${convCount || 0} conversations in DB`);
+
   const { data: accounts } = await supabase.from('accounts').select('*').eq('status', 'connected');
   if (accounts) {
+    logger.info(`🔄 Attempting to restore ${accounts.length} active connectors...`);
     for (const acc of accounts) {
       if (acc.platform === 'whatsapp') {
         activeConnectors[acc.id] = await connectToWhatsApp(acc.id, (p, f, c, aid, eid) => relayToTelegram(p, f, c, aid, eid));
