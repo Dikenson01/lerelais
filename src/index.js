@@ -147,7 +147,7 @@ async function setupMenuButton() {
 const distPath = path.resolve(__dirname, '../web/dist');
 app.use(express.static(distPath));
 
-app.get('/:any*', (req, res, next) => {
+app.use((req, res, next) => {
   if (req.path.startsWith('/api')) return next();
   res.sendFile(path.join(distPath, 'index.html'));
 });
