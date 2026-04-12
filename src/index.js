@@ -195,8 +195,10 @@ app.get('/api/accounts', async (req, res) => {
   try {
     const { data: accounts, error } = await supabase.from('accounts').select('*');
     if (error) throw error;
+    logger.info(`GET /api/accounts: returning ${accounts?.length || 0} accounts`);
     res.json(accounts);
   } catch (err) {
+    logger.error('Accounts fetch error:', err);
     res.status(500).json({ error: err.message });
   }
 });
