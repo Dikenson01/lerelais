@@ -189,7 +189,7 @@ function App() {
             <div style={{ background: '#fff', padding: '16px', borderRadius: '16px', display: 'inline-block', marginTop: '16px' }}>
               {waQr ? <img src={`https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(waQr)}`} alt="QR" /> : 'Chargement...'}
             </div>
-            <p style={{ marginTop: '20px', color: 'var(--med-gray)' }}>Ouvrez WhatsApp > Appareils connectés</p>
+            <p style={{ marginTop: '20px', color: 'var(--med-gray)' }}>Ouvrez WhatsApp &gt; Appareils connectés</p>
           </div>
         ) : (
           <form onSubmit={e => { e.preventDefault(); startInstagramConnect(); }}>
@@ -239,7 +239,7 @@ function App() {
         <div className="scroll-area">
           {view === 'settings' ? (
             <div style={{ padding: '20px' }}>
-              <h3 style={{ fontSize: '12px', color: 'var(--dim-gray)', textTransform: 'uppercase', letter-spacing: '0.4px', marginBottom: '16px' }}>Comptes</h3>
+              <h3 style={{ fontSize: '12px', color: 'var(--dim-gray)', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '16px' }}>Comptes</h3>
               {accounts.map(acc => (
                 <div key={acc.id} className="conv-card" style={{ cursor: 'default', background: 'var(--bg-card)', marginBottom: '10px' }}>
                   <div className="avatar-wrap">
