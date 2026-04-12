@@ -33,11 +33,7 @@ const distPath = path.resolve(__dirname, '../web/dist');
 if (process.env.NODE_ENV === 'production') {
   logger.info('Running in PRODUCTION mode');
   app.use(express.static(distPath));
-  // Serve index.html for any unknown routes (SPA support)
-  app.get('*', (req, res, next) => {
-    if (req.path.startsWith('/api')) return next();
-    res.sendFile(path.join(distPath, 'index.html'));
-  });
+  // The catch-all is moved to the bottom of the file
 } else {
   // --- FRONTEND INTEGRATION (DEV) ---
   if (!process.env.NO_VITE) {
@@ -359,6 +355,14 @@ async function setupMenuButton() {
   } catch (err) {
     logger.error('❌ Menu button failed:', err);
   }
+}
+
+// Serve index.html for any unknown routes (SPA support) - Production only
+if (process.env.NODE_ENV === 'production') {
+  app.get('/:path*', (req, res, next) => {
+    if (req.path.startsWith('/api')) return next();
+    res.sendFile(path.join(distPath, 'index.html'));
+  });
 }
 
 async function start() {
