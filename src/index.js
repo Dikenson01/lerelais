@@ -272,35 +272,6 @@ bot.on('text', async (ctx, next) => {
   return next();
 });
 
-async function handleConnectWhatsApp(ctx, phoneNumber = null) {
-  const accountId = crypto.randomUUID();
-  await supabase.from('accounts').insert({ id: accountId, platform: 'whatsapp', status: 'pairing', username: 'whatsapp_user' });
-  const waitMsg = await ctx.reply('🔄 Initialisation...');
-  try {
-    const sock = await connectToWhatsApp(accountId, (p, f, c, aid, eid) => {
-      relayToTelegram(p, f, c, aid, eid);
-    }, {
-      phoneNumber,
-      onQR: async (qr) => {
-        const qrBuffer = await QRCode.toBuffer(qr);
-        ctx.replyWithPhoto({ source: qrBuffer }, { caption: '📸 Scannez pour vous connecter.' });
-        ctx.deleteMessage(waitMsg.message_id).catch(() => {});
-      },
-      onPairingCode: (code) => {
-        ctx.telegram.editMessageText(ctx.chat.id, waitMsg.message_id, null, `🔢 Code : \`${code}\``, { parse_mode: 'Markdown' });
-      },
-      onConnected: () => {
-        ctx.reply('✅ connecté !');
-        activeConnectors[accountId] = sock;
-      }
-    });
-    activeConnectors[accountId] = sock;
-  } catch (err) {
-    logger.error(err);
-    ctx.reply('❌ Erreur.');
-  }
-}
-
 async function relayToTelegram(platform, from, content, accountId, externalId) {
   try {
     const adminId = process.env.ADMIN_ID;
@@ -318,21 +289,10 @@ async function restoreConnectors() {
   if (accounts) {
     for (const acc of accounts) {
       if (acc.platform === 'whatsapp') {
-        activeConnectors[acc.id] = await connectToWhatsApp(acc.id, (p, f, c, aid, eid) => relayToTelegram(p, f, c, aid, eid));
+        const sock = await connectToWhatsApp(acc.id, (p, f, c, aid, eid) => relayToTelegram(p, f, c, aid, eid));
+        activeConnectors[acc.id] = sock;
       }
     }
-  }
-}
-
-async function setupMenuButton() {
-  try {
-    const webAppUrl = process.env.WEBAPP_URL || 'http://localhost:5173';
-    if (webAppUrl.startsWith('https://')) {
-      await bot.telegram.setChatMenuButton({ menu_button: { type: 'web_app', text: 'Ouvrir LeRelais', web_app: { url: webAppUrl } } });
-      logger.info('✅ Menu Button configured');
-    }
-  } catch (err) {
-    logger.error('❌ Menu button failed:', err);
   }
 }
 
