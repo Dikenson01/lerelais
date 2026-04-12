@@ -211,6 +211,10 @@ function App() {
     return title.includes(query) && (view === 'all' || c.platform === view);
   });
 
+  const filteredContacts = (contacts || []).filter(c =>
+    (c.display_name || '').toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
   return (
     <div className="app-container">
       {/* Elite Navigation Rail */}
