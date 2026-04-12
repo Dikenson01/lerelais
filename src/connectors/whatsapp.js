@@ -16,7 +16,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 export async function connectToWhatsApp(accountId, onMessage, onEvents) {
-  const authPath = path.join(__dirname, `../../auth/wa-${accountId}`);
+  const authPath = path.join(__dirname, `../auth/wa-${accountId}`);
   if (!fs.existsSync(authPath)) fs.mkdirSync(authPath, { recursive: true });
   
   // 1. FULL RESTORE from DB
