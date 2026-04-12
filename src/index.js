@@ -145,6 +145,26 @@ app.get('/api/contacts', async (req, res) => {
   }
 });
 
+app.post('/api/sync/all', async (req, res) => {
+  try {
+    logger.info('🔄 Manual sync requested for all accounts');
+    for (const accountId in activeConnectors) {
+      const sock = activeConnectors[accountId];
+      if (sock?.ev) {
+        // Request aggressive history/contact sync from WA
+        sock.ev.emit('messaging-history.sync', { chats: [], contacts: [], messages: [], isLatest: true });
+        logger.info(`📡 Triggered deep sync for WA ${accountId}`);
+      }
+    }
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/search', async (req, res) => {
   const { q } = req.query;
   if (!q) return res.status(400).json({ error: 'Search query required' });

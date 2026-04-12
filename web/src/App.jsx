@@ -275,6 +275,15 @@ function App() {
               <button className="add-account-btn" onClick={() => { setShowConnect(true); setConnectStep('select'); }}>
                 <Plus size={18} /> Ajouter un compte
               </button>
+              <button 
+                className="add-account-btn sync-btn" 
+                style={{ marginTop: '10px', background: '#2a2d33' }}
+                onClick={() => {
+                  axios.post(`${API_BASE}/sync/all`).then(() => alert('Synchronisation lancée...'));
+                }}
+              >
+                <Activity size={18} /> Forcer la synchronisation
+              </button>
             </section>
           </div>
         </main>

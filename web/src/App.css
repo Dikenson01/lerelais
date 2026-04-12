@@ -815,7 +815,48 @@
 .status-pill.connected { color: #23a55a; background: #23a55a22; }
 .status-pill.pairing { color: #f0b232; background: #f0b23222; }
 
-@media (max-width: 768px) {
-  .settings-content { padding: 20px; }
-  .account-card { padding: 16px; }
+.contacts-list {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.contact-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: #1e1f22;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.contact-avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+  border: 2px solid #2a2d33;
+}
+
+.contact-info {
+  flex: 1;
+  overflow: hidden;
+}
+
+.contact-info h3 {
+  margin: 0;
+  font-size: 15px;
+  color: #fff;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
+}
+
+.contact-info p {
+  margin: 4px 0 0 0;
+  font-size: 13px;
+  color: #8e9297;
 }
