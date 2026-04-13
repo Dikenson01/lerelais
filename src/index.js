@@ -203,8 +203,16 @@ async function start() {
   await setupMenuButton();
   try {
     await bot.telegram.deleteWebhook({ drop_pending_updates: true });
-    bot.launch();
-  } catch (e) {}
+    bot.launch().catch(err => {
+      if (err.response?.error_code === 409) {
+        logger.warn('Telegram Conflict (409) - Another instance is running. This is normal during deployment.');
+      } else {
+        throw err;
+      }
+    });
+  } catch (e) {
+    logger.error('Telegraf Launch Error:', e.message);
+  }
 }
 
 start();
