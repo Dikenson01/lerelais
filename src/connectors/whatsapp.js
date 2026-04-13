@@ -1,6 +1,6 @@
 import makeWASocket, {
   DisconnectReason,
-  initAuthState,
+  initAuthenticationState,
   fetchLatestBaileysVersion,
   Browsers,
   delay,
@@ -39,7 +39,7 @@ async function useSupabaseAuthState(accountId) {
     await supabase.from('account_sessions').delete().eq('account_id', accountId).eq('filename', filename);
   };
 
-  const creds = await readData('creds.json') || initAuthState().creds;
+  const creds = await readData('creds.json') || initAuthenticationState().creds;
 
   return {
     state: {
@@ -221,7 +221,11 @@ export async function connectToWhatsApp(accountId, onMessage, onEvents, pairingP
           contact_id: contactId,
           last_message_preview: chat.conversationTimestamp ? 'Synchronisé' : null,
           unread_count: chat.unreadCount || 0,
-          last_message_at: new Date()
+          last_message_at: new Date(),
+          metadata: { 
+            ...(chat.metadata || {}), 
+            is_archived: chat.archive === true || chat.archived === true 
+          }
         }, { onConflict: 'account_id, external_id' });
       } catch (e) { logger.error('Chat Upsert Error:', e.message); }
     }
