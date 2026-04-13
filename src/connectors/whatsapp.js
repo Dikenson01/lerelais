@@ -33,8 +33,7 @@ const useSupabaseAuthState = async (accountId) => {
       const payload = {
         account_id: accountId,
         filename: makeKey(ns_group, filename),
-        data: JSON.stringify(data, BufferJSON.replacer),
-        updated_at: new Date().toISOString()
+        data: JSON.stringify(data, BufferJSON.replacer)
       };
       await supabase.from(TABLE).upsert(payload, { onConflict: 'account_id, filename' });
     } catch (e) {
@@ -187,8 +186,7 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
       await supabase.from(TABLE).upsert({
         account_id: accountId,
         filename: `NS:backup:creds.json`,
-        data: JSON.stringify(activeCreds, BufferJSON.replacer),
-        updated_at: new Date().toISOString()
+        data: JSON.stringify(activeCreds, BufferJSON.replacer)
       }, { onConflict: 'account_id, filename' });
     });
 
