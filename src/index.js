@@ -147,13 +147,28 @@ app.get('/api/conversations', async (req, res) => {
         continue;
       }
 
+      // LAZY IDENTIFICATION : Si pas de contact_id, tenter de le trouver par JID ou LID mapping
+      if (!conv.contact_id) {
+        const jid = conv.external_id;
+        const { data: contacts } = await supabase.from('contacts').select('id, metadata').eq('account_id', conv.account_id);
+        const match = contacts?.find(c => 
+          c.external_id === jid || 
+          (jid.endsWith('@lid') && c.metadata?.lid === jid) ||
+          (c.external_id.split('@')[0] === jid.split('@')[0])
+        );
+        if (match) {
+          conv.contact_id = match.id;
+          // Mise à jour asynchrone pour la prochaine fois
+          supabase.from('conversations').update({ contact_id: match.id }).eq('id', conv.id).then(() => {});
+        }
+      }
+
       if (conv.contact_id) {
         if (!seenContacts.has(conv.contact_id)) {
           unified.push(conv);
           seenContacts.add(conv.contact_id);
         }
       } else {
-        // Contact non identifié encore (LID orphelin)
         unified.push(conv);
       }
     }
