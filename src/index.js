@@ -41,7 +41,7 @@ app.get('/api/accounts', async (req, res) => {
 });
 
 app.get('/api/conversations', async (req, res) => {
-  const { data, error } = await supabase.from('conversations').select('*, contacts(*)').order('updated_at', { ascending: false });
+  const { data, error } = await supabase.from('conversations').select('*, contacts(*)').order('last_message_at', { ascending: false });
   if (error) {
     logger.error('CRITICAL DB ERROR /api/conversations:', JSON.stringify(error, null, 2));
     return res.status(500).json({ error: error.message });
@@ -84,7 +84,7 @@ app.post('/api/messages', async (req, res) => {
       timestamp: new Date()
     }).select().single();
 
-    await supabase.from('conversations').update({ last_message_preview: content, updated_at: new Date() }).eq('id', conversationId);
+    await supabase.from('conversations').update({ last_message_preview: content, last_message_at: new Date() }).eq('id', conversationId);
     res.json(msg);
   } catch (err) {
     res.status(500).json({ error: err.message });

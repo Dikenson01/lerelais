@@ -72,23 +72,31 @@ export async function connectToWhatsApp(accountId, onMessage, onEvents) {
   const syncContacts = async (contacts) => {
     if (!contacts.length) return;
     logger.info(`👥 Syncing ${contacts.length} contacts en masse...`);
-    
+
     const contactUpserts = [];
     const identityUpserts = [];
 
     for (const contact of contacts) {
       const jid = jidNormalizedUser(contact.id || contact.jid);
       if (!jid || jid.endsWith('@g.us')) continue; // Groupes à part
-      
+
       const phone = jid.split('@')[0];
       const name = contact.name || contact.verifiedName || contact.notify || phone;
-      
+
+      // Tenter de récupérer la photo de profil
+      let avatarUrl = contact.imgUrl || null;
+      if (!avatarUrl) {
+        try {
+          avatarUrl = await sock.profilePictureUrl(jid, 'image');
+        } catch (_) { /* pas de photo de profil */ }
+      }
+
       identityUpserts.push({ phone, full_name: name });
       contactUpserts.push({
         account_id: accountId,
         external_id: jid,
         display_name: name,
-        avatar_url: contact.imgUrl || null,
+        avatar_url: avatarUrl,
         metadata: { source: 'whatsapp', platform: 'whatsapp' }
       });
     }
@@ -106,27 +114,39 @@ export async function connectToWhatsApp(accountId, onMessage, onEvents) {
   const syncChats = async (chats) => {
     if (!chats.length) return;
     logger.info(`💬 Syncing ${chats.length} conversations et groupes...`);
-    const chatUpserts = [];
 
     for (const chat of chats) {
       const jid = jidNormalizedUser(chat.id);
       const isGroup = jid.endsWith('@g.us');
-      
-      chatUpserts.push({
-        account_id: accountId,
-        external_id: jid,
-        platform: 'whatsapp',
-        title: chat.name || (isGroup ? 'Groupe WhatsApp' : jid.split('@')[0]),
-        is_group: isGroup,
-        last_message_preview: chat.lastMessageRecvTimestamp ? 'Synchronisé' : null,
-        unread_count: chat.unreadCount || 0,
-        updated_at: new Date()
-      });
-    }
 
-    try {
-      if (chatUpserts.length) await supabase.from('conversations').upsert(chatUpserts, { onConflict: 'account_id, external_id' });
-    } catch (e) { logger.error('Chat Sync Error:', e); }
+      // Chercher le contact_id correspondant pour les conversations 1-to-1
+      let contactId = null;
+      if (!isGroup) {
+        try {
+          const { data: contact } = await supabase
+            .from('contacts')
+            .select('id')
+            .eq('account_id', accountId)
+            .eq('external_id', jid)
+            .single();
+          if (contact) contactId = contact.id;
+        } catch (_) {}
+      }
+
+      try {
+        await supabase.from('conversations').upsert({
+          account_id: accountId,
+          external_id: jid,
+          platform: 'whatsapp',
+          title: chat.name || (isGroup ? 'Groupe WhatsApp' : jid.split('@')[0]),
+          is_group: isGroup,
+          contact_id: contactId,
+          last_message_preview: chat.lastMessageRecvTimestamp ? 'Synchronisé' : null,
+          unread_count: chat.unreadCount || 0,
+          last_message_at: new Date()
+        }, { onConflict: 'account_id, external_id' });
+      } catch (e) { logger.error('Chat Upsert Error:', e); }
+    }
   };
 
   sock.ev.on('chats.set', ({ chats }) => syncChats(chats));
@@ -161,12 +181,27 @@ export async function connectToWhatsApp(accountId, onMessage, onEvents) {
       const content = msg.message?.conversation || msg.message?.extendedTextMessage?.text || (msg.message?.imageMessage ? '[Image]' : '[Média]');
       
       try {
+        // Chercher le contact_id pour cette conversation
+        let contactId = null;
+        if (!jid.endsWith('@g.us')) {
+          try {
+            const { data: contact } = await supabase
+              .from('contacts')
+              .select('id')
+              .eq('account_id', accountId)
+              .eq('external_id', jid)
+              .single();
+            if (contact) contactId = contact.id;
+          } catch (_) {}
+        }
+
         const { data: conv } = await supabase.from('conversations').upsert({
           account_id: accountId,
           external_id: jid,
           platform: 'whatsapp',
+          contact_id: contactId,
           last_message_preview: content?.slice(0, 100),
-          updated_at: new Date()
+          last_message_at: new Date()
         }, { onConflict: 'account_id, external_id' }).select('id').single();
 
         if (conv) {
