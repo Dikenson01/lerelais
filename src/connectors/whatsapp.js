@@ -483,6 +483,7 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
             const content = msg.message.conversation || msg.message.extendedTextMessage?.text || msg.message.imageMessage?.caption || msg.message.videoMessage?.caption || '';
             const mediaType = msg.message.imageMessage ? 'image' : msg.message.videoMessage ? 'video' : msg.message.audioMessage ? 'audio' : msg.message.documentMessage ? 'document' : null;
 
+            // UNIFICATION ABSOLUE : On résout l'ID de la conversation Maître AVANT d'insérer
             const convId = await getOrCreateUnifiedConversation(jid, msg.pushName, jid.endsWith('@g.us'));
             
             if (convId) {
@@ -490,7 +491,7 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
                 conversation_id: convId,
                 account_id: accountId,
                 remote_id: msg.key.id,
-                sender_id: jid,
+                sender_id: msg.key.fromMe ? accountId : jid,
                 content: content,
                 media_type: mediaType,
                 is_from_me: msg.key.fromMe,

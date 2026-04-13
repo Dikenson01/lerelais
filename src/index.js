@@ -125,12 +125,44 @@ app.get('/api/accounts', async (req, res) => {
 });
 
 app.get('/api/conversations', async (req, res) => {
-  const { data, error } = await supabase.from('conversations').select('*, contacts(*)').order('last_message_at', { ascending: false });
-  if (error) {
-    logger.error('CRITICAL DB ERROR /api/conversations:', JSON.stringify(error, null, 2));
-    return res.status(500).json({ error: error.message });
+  try {
+    const { data: convs, error } = await supabase
+      .from('conversations')
+      .select('*, contacts(*)')
+      .order('last_message_at', { ascending: false });
+    
+    if (error) throw error;
+
+    // --- UNIFICATION MIROIR (V3) : Groupement par contact ---
+    const unified = [];
+    const seenContacts = new Set();
+    const seenGroups = new Set();
+
+    for (const conv of convs) {
+      if (conv.is_group) {
+        if (!seenGroups.has(conv.external_id)) {
+          unified.push(conv);
+          seenGroups.add(conv.external_id);
+        }
+        continue;
+      }
+
+      if (conv.contact_id) {
+        if (!seenContacts.has(conv.contact_id)) {
+          unified.push(conv);
+          seenContacts.add(conv.contact_id);
+        }
+      } else {
+        // Contact non identifié encore (LID orphelin)
+        unified.push(conv);
+      }
+    }
+
+    res.json(unified);
+  } catch (err) {
+    logger.error('Error fetching unified conversations:', err.message);
+    res.status(500).json({ error: err.message });
   }
-  res.json(data || []);
 });
 
 app.get('/api/contacts', async (req, res) => {
@@ -173,9 +205,30 @@ app.post('/api/conversations/ensure', async (req, res) => {
 });
 
 app.get('/api/messages/:convId', async (req, res) => {
-  const { data, error } = await supabase.from('messages').select('*').eq('conversation_id', req.params.convId).order('timestamp', { ascending: true });
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data || []);
+  const { convId } = req.params;
+  try {
+    // 1. Trouver l'ID du contact pour cette conversation
+    const { data: conv } = await supabase.from('conversations').select('contact_id, is_group').eq('id', convId).maybeSingle();
+    
+    let query = supabase.from('messages').select('*');
+    if (conv?.is_group) {
+      query = query.eq('conversation_id', convId);
+    } else if (conv?.contact_id) {
+      // MIROIR UNIFIÉ : On cherche tous les messages rattachés à ce contact ID
+      const { data: siblingConvs } = await supabase.from('conversations').select('id').eq('contact_id', conv.contact_id);
+      const convIds = siblingConvs.map(c => c.id);
+      query = query.in('conversation_id', convIds);
+    } else {
+      query = query.eq('conversation_id', convId);
+    }
+
+    const { data, error } = await query.order('timestamp', { ascending: true });
+    if (error) throw error;
+    res.json(data || []);
+  } catch (err) {
+    logger.error('Error fetching unified messages:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.post('/api/messages', async (req, res) => {
