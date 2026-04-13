@@ -8,16 +8,18 @@ import {
   Send, 
   X, 
   RefreshCw,
-  ArrowLeft
+  ArrowLeft,
+  Loader2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import axios from 'axios';
+import QRCode from 'react-qr-code';
 import './App.css';
 
-const API_BASE = 'http://localhost:3000/api';
+const API_BASE = '/api';
 
 function App() {
-  const [view, setView] = useState('inbox'); // 'inbox', 'contacts', 'settings'
+  const [view, setView] = useState('inbox');
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
   const [conversations, setConversations] = useState([]);
   const [contacts, setContacts] = useState([]);
@@ -29,6 +31,11 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
   
+  // Pairing State
+  const [pairingStatus, setPairingStatus] = useState(null); // 'initiating', 'waiting_qr', 'connected'
+  const [pairingQR, setPairingQR] = useState(null);
+  const [pairingId, setPairingId] = useState(null);
+
   const messagesEndRef = useRef(null);
 
   useEffect(() => {
@@ -47,8 +54,12 @@ function App() {
   }, [selectedConv]);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    let interval;
+    if (pairingId && pairingStatus === 'waiting_qr') {
+      interval = setInterval(checkPairingStatus, 2000);
+    }
+    return () => clearInterval(interval);
+  }, [pairingId, pairingStatus]);
 
   const preloadData = async () => {
     try {
@@ -89,6 +100,37 @@ function App() {
     } catch (err) {
       console.error('Send failed:', err);
     }
+  };
+
+  // Pairing Logic
+  const startWhatsAppPairing = async () => {
+    setPairingStatus('initiating');
+    try {
+      const res = await axios.post(`${API_BASE}/connect/whatsapp`);
+      setPairingId(res.data.accountId);
+      setPairingStatus('waiting_qr');
+    } catch (err) {
+      console.error('Pairing fail:', err);
+      setPairingStatus(null);
+    }
+  };
+
+  const checkPairingStatus = async () => {
+    if (!pairingId) return;
+    try {
+      const res = await axios.get(`${API_BASE}/connect/whatsapp/status/${pairingId}`);
+      if (res.data.qr) setPairingQR(res.data.qr);
+      if (res.data.status === 'connected') {
+        setPairingStatus('connected');
+        setPairingId(null);
+        setPairingQR(null);
+        preloadData();
+        setTimeout(() => {
+          setPairingStatus(null);
+          setShowAddModal(false);
+        }, 2000);
+      }
+    } catch (e) {}
   };
 
   const filteredConvs = conversations.filter(c => 
@@ -199,9 +241,7 @@ function App() {
           {view === 'contacts' && (
             <div className="contact-list">
               {filteredContacts.map(contact => (
-                <div key={contact.id} className="conv-card" onClick={() => {
-                   // Logic for new conversation could go here
-                }}>
+                <div key={contact.id} className="conv-card" onClick={() => {}}>
                   <div className="avatar-wrap">
                     {contact.avatar_url ? <img src={contact.avatar_url} alt="" /> : <span>{contact.display_name?.charAt(0)}</span>}
                   </div>
@@ -224,7 +264,10 @@ function App() {
                     <strong>{acc.account_name || acc.platform}</strong>
                     <span className={`status-pill ${acc.status}`}>{acc.status}</span>
                   </div>
-                  <button className="disconnect-btn">Déconnecter</button>
+                  <button className="disconnect-btn" onClick={async () => {
+                    await axios.delete(`${API_BASE}/accounts/${acc.id}`);
+                    preloadData();
+                  }}>Déconnecter</button>
                 </div>
               ))}
               {accounts.length === 0 && <p className="dim-text">Aucun compte lié.</p>}
@@ -321,27 +364,52 @@ function App() {
 
       {/* Add Account Modal */}
       {showAddModal && (
-        <div className="modal-overlay" onClick={() => setShowAddModal(false)}>
+        <div className="modal-overlay" onClick={() => { if (!pairingStatus) setShowAddModal(false); }}>
           <motion.div 
             className="elite-modal"
             initial={{ scale: 0.9, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
             onClick={e => e.stopPropagation()}
           >
-            <button className="modal-close" onClick={() => setShowAddModal(false)}><X size={20} /></button>
-            <h2>Ajouter un compte</h2>
-            <p>Choisissez une plateforme pour synchroniser vos messages.</p>
+            {!pairingStatus && <button className="modal-close" onClick={() => setShowAddModal(false)}><X size={20} /></button>}
             
-            <div className="platform-list">
-              <div className="platform-item" onClick={() => { setShowAddModal(false); }}>
-                <div className="platform-dot whatsapp" style={{ position: 'relative', border: 'none' }}></div>
-                <strong>WhatsApp</strong>
+            {pairingStatus ? (
+              <div className="pairing-view">
+                <h2>{pairingStatus === 'connected' ? '✅ Connecté !' : 'Scannez le code'}</h2>
+                <p>Ouvrez WhatsApp > Appareils connectés > Connecter un appareil.</p>
+                
+                <div className="qr-container">
+                  {pairingQR ? (
+                    <div className="qr-box">
+                      <QRCode value={pairingQR} size={220} />
+                    </div>
+                  ) : (
+                    <div className="qr-loading">
+                      <Loader2 className="spinner" size={40} />
+                      <p>Génération du QR Code...</p>
+                    </div>
+                  )}
+                </div>
+                {pairingStatus !== 'connected' && (
+                  <button className="cancel-pairing" onClick={() => { setPairingStatus(null); setPairingId(null); setPairingQR(null); }}>Annuler</button>
+                )}
               </div>
-              <div className="platform-item" onClick={() => {}}>
-                <div className="platform-dot instagram" style={{ position: 'relative', border: 'none' }}></div>
-                <strong>Instagram</strong>
-              </div>
-            </div>
+            ) : (
+              <>
+                <h2>Ajouter un compte</h2>
+                <p>Choisissez une plateforme pour synchroniser vos messages.</p>
+                <div className="platform-list">
+                  <div className="platform-item" onClick={startWhatsAppPairing}>
+                    <div className="platform-dot whatsapp" style={{ position: 'relative', border: 'none' }}></div>
+                    <strong>WhatsApp</strong>
+                  </div>
+                  <div className="platform-item" onClick={() => alert('Instagram arrive bientôt !')}>
+                    <div className="platform-dot instagram" style={{ position: 'relative', border: 'none' }}></div>
+                    <strong>Instagram</strong>
+                  </div>
+                </div>
+              </>
+            )}
           </motion.div>
         </div>
       )}
