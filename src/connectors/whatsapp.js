@@ -240,13 +240,13 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
 
         // --- MAINTENANCE DE POST-CONNEXION (Générique pour tous) ---
         setTimeout(async () => {
-          // 1. Unifier les conversations (LID/PN Merge)
-          const { data: convs } = await supabase.from('conversations').select('id, external_id, contact_id').eq('account_id', accountId);
+          // 1. Unifier les conversations (Passeport Fusion)
+          const { data: convs } = await supabase.from('conversations').select('id, title, external_id, contact_id').eq('account_id', accountId);
           if (convs) {
-            const contactMap = {};
+            const masterMap = {};
             for (const conv of convs) {
               if (!conv.contact_id) {
-                 const cid = await getContactId(conv.external_id);
+                 const cid = await getContactId(conv.external_id, conv.title);
                  if (cid) {
                    conv.contact_id = cid;
                    await supabase.from('conversations').update({ contact_id: cid }).eq('id', conv.id);
@@ -254,16 +254,13 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
               }
 
               if (conv.contact_id) {
-                if (!contactMap[conv.contact_id]) {
-                  contactMap[conv.contact_id] = conv.id;
+                if (!masterMap[conv.contact_id]) {
+                  masterMap[conv.contact_id] = conv.id;
                 } else {
-                  // DOUBLON TROUVÉ ! On fusionne
-                  const masterId = contactMap[conv.contact_id];
-                  logger.info(`[WA-MERGE] Merging duplicate conversation ${conv.id} into ${masterId}`);
-                  
-                  // Déplacer les messages
+                  // FUSION ATOMIQUE : Déplace les messages vers la boîte "Miroir" principale
+                  const masterId = masterMap[conv.contact_id];
+                  logger.info(`[WA-PASSPORT] Merging ${conv.id} into master thread ${masterId}`);
                   await supabase.from('messages').update({ conversation_id: masterId }).eq('conversation_id', conv.id);
-                  // Supprimer le doublon
                   await supabase.from('conversations').delete().eq('id', conv.id);
                 }
               }
@@ -327,24 +324,36 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
       }
     });
 
-    // --- HELPERS POUR LA SYNCHRO ---
-    const getContactId = async (jid) => {
-      // 1. Recherche par JID exact (PN ou LID)
-      let { data } = await supabase.from('contacts').select('id, avatar_url, phone_number').eq('account_id', accountId).eq('external_id', jid).maybeSingle();
+    // --- RÉSOLVEUR DE PASSEPORT (Miroir V4) ---
+    const getContactId = async (jid, pushName = null) => {
+      // 1. Recherche directe par JID (PN ou LID)
+      let { data } = await supabase.from('contacts').select('id, avatar_url, display_name').eq('account_id', accountId).eq('external_id', jid).maybeSingle();
       
-      // 2. Si non trouvé et c'est un LID, tenter de trouver via le mapping interne
+      // 2. Si c'est un LID, chercher s'il est déjà mappé dans les métadonnées d'un autre contact
       if (!data && jid.endsWith('@lid')) {
-        const lid = jid.split('@')[0];
         const { data: mapping } = await supabase.from('contacts')
-          .select('id, avatar_url')
+          .select('id, avatar_url, display_name')
           .eq('account_id', accountId)
           .filter('metadata->lid', 'eq', jid)
           .maybeSingle();
         data = mapping;
       }
 
+      // 3. (ULTIME) Si on n'a toujours rien mais qu'on a un nom (Miroir Radical)
+      if (!data && pushName) {
+        const { data: byName } = await supabase.from('contacts')
+          .select('id, avatar_url, display_name')
+          .eq('account_id', accountId)
+          .eq('display_name', pushName)
+          .maybeSingle();
+        data = byName;
+        // On lie l'ID technique au contact trouvé immédiatement
+        if (data) {
+          await supabase.from('contacts').update({ metadata: { lid: jid } }).eq('id', data.id);
+        }
+      }
+
       if (data && !data.avatar_url) {
-        // Tenter de récupérer l'avatar si manquant (Generic pour tous)
         try {
           const url = await sock.profilePictureUrl(jid, 'image').catch(() => null);
           if (url) await supabase.from('contacts').update({ avatar_url: url }).eq('id', data.id);
@@ -457,14 +466,24 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
       for (const contact of contacts) {
         const jid = jidNormalizedUser(contact.id);
         const lid = contact.id.endsWith('@lid') ? jid : null;
+        const name = contact.name || contact.notify || jid.split('@')[0];
         
         await supabase.from('contacts').upsert({
           account_id: accountId,
           external_id: jid,
-          display_name: contact.name || contact.notify || jid.split('@')[0],
+          display_name: name,
           avatar_url: null,
           metadata: { lid: lid }
         }, { onConflict: 'account_id, external_id' });
+
+        // Si c'est un LID, on essaie de l'associer à un contact PN existant par le nom
+        if (lid) {
+          const { data: existing } = await supabase.from('contacts').select('id').eq('account_id', accountId).eq('display_name', name).neq('external_id', jid).maybeSingle();
+          if (existing) {
+             logger.info(`[WA-PASSPORT] Linking LID ${lid} to existing contact ${name}`);
+             await supabase.from('contacts').update({ metadata: { lid: jid } }).eq('id', existing.id);
+          }
+        }
       }
     });
 
