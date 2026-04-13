@@ -31,20 +31,21 @@ const useSupabaseAuthState = async (accountId) => {
   const writeData = async (data, filename, ns_group = 'active') => {
     try {
       const key = makeKey(ns_group, filename);
-      // Pattern robuste : Nettoyage avant insertion pour éviter les erreurs de contraintes
-      await supabase.from(TABLE).delete().eq('account_id', accountId).eq('filename', key);
-      
-      const { error } = await supabase.from(TABLE).insert({
-        account_id: accountId,
-        filename: key,
-        data: JSON.stringify(data, BufferJSON.replacer)
-      });
-      
-      if (error) {
-        logger.error(`[WA-DB-WRITE-ERR] ${key}: ${error.message}`);
-      } else {
-        // Log discret en info pour confirmer la persistance
+      // Utilisation d'un verrou local simple pour éviter les conflits de duplication
+      if (global.wa_db_locks?.[key]) return;
+      if (!global.wa_db_locks) global.wa_db_locks = {};
+      global.wa_db_locks[key] = true;
+
+      try {
+        await supabase.from(TABLE).delete().eq('account_id', accountId).eq('filename', key);
+        await supabase.from(TABLE).insert({
+          account_id: accountId,
+          filename: key,
+          data: JSON.stringify(data, BufferJSON.replacer)
+        });
         if (filename === 'creds.json') logger.info(`[WA-DB] Persisted creds for ${accountId} (${ns_group})`);
+      } finally {
+        delete global.wa_db_locks[key];
       }
     } catch (e) {
       logger.error(`[WA-DB] Write exception (${ns_group}:${filename}):`, e.message);
@@ -268,28 +269,55 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
       } catch (e) {
         logger.error(`[WA-SYNC-ERR] chats.update: ${e.message}`);
       }
-    });
+      // --- HELPERS POUR LA SYNCHRO ---
+    const getContactId = async (jid) => {
+      const { data } = await supabase.from('contacts').select('id, avatar_url').eq('external_id', jid).maybeSingle();
+      if (data && !data.avatar_url) {
+        // Tenter de récupérer l'avatar si manquant
+        try {
+          const url = await sock.profilePictureUrl(jid, 'image').catch(() => null);
+          if (url) await supabase.from('contacts').update({ avatar_url: url }).eq('id', data.id);
+        } catch (e) {}
+      }
+      return data?.id;
+    };
 
-    sock.ev.on('messaging-history.sync', async ({ chats, contacts, messages, isLatest }) => {
+    sock.ev.on('messaging-history.sync', async ({ chats, contacts: syncContacts, messages }) => {
       try {
-        logger.info(`[WA] History Sync Started: ${chats?.length || 0} chats, ${messages?.length || 0} messages...`);
-        
+        logger.info(`[WA] History Sync Started: ${chats?.length || 0} chats, ${syncContacts?.length || 0} contacts`);
+
+        // 0. Sync Contacts d'abord pour avoir les IDs
+        if (syncContacts) {
+          for (const contact of syncContacts) {
+            const jid = jidNormalizedUser(contact.id);
+            await supabase.from('contacts').upsert({
+              account_id: accountId,
+              external_id: jid,
+              display_name: contact.name || contact.verifiedName || contact.notify || jid.split('@')[0],
+              phone_number: jid.split('@')[0],
+              metadata: { is_business: !!contact.verifiedName }
+            }, { onConflict: 'account_id, external_id' });
+          }
+        }
+
         // 1. Sync Chats
         if (chats) {
           for (const chat of chats) {
             const jid = jidNormalizedUser(chat.id);
+            const contact_id = await getContactId(jid);
+            
             const { error } = await supabase.from('conversations').upsert({
               account_id: accountId,
               external_id: jid,
+              contact_id: contact_id, // LIAISON CRITIQUE
               platform: 'whatsapp',
               title: chat.name || jid.split('@')[0],
               is_group: chat.id.endsWith('@g.us'),
               metadata: { is_archived: chat.archived === true },
-              updated_at: new Date()
+              last_message_at: new Date() // FIX COLONNE
             }, { onConflict: 'account_id, external_id' });
             
             if (error) logger.error(`[WA-DB-SYNC-ERR] Chat ${jid}: ${error.message}`);
-            else logger.info(`[WA-DB-SYNC] Synced chat: ${jid}`);
           }
         }
 
@@ -299,13 +327,12 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
             if (!msg.message) continue;
             const jid = jidNormalizedUser(msg.key.remoteJid);
             const text = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
+            const contact_id = await getContactId(jid);
             
-            const { data: conv, error: convErr } = await supabase.from('conversations').select('id').eq('account_id', accountId).eq('external_id', jid).maybeSingle();
-            
-            if (convErr) logger.error(`[WA-DB-SYNC-ERR] FindConv ${jid}: ${convErr.message}`);
+            const { data: conv } = await supabase.from('conversations').select('id').eq('account_id', accountId).eq('external_id', jid).maybeSingle();
             
             if (conv) {
-              const { error: msgErr } = await supabase.from('messages').upsert({
+              await supabase.from('messages').upsert({
                 conversation_id: conv.id,
                 account_id: accountId,
                 remote_id: msg.key.id,
@@ -315,7 +342,12 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
                 timestamp: new Date(msg.messageTimestamp * 1000)
               }, { onConflict: 'remote_id' });
               
-              if (msgErr) logger.error(`[WA-DB-SYNC-ERR] Msg ${msg.key.id}: ${msgErr.message}`);
+              // Mettre à jour last_message_at et contact_id si besoin
+              await supabase.from('conversations').update({ 
+                last_message_at: new Date(msg.messageTimestamp * 1000),
+                last_message_preview: text.substring(0, 100),
+                contact_id: contact_id
+              }).eq('id', conv.id);
             }
           }
         }

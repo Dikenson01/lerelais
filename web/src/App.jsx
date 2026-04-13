@@ -122,13 +122,16 @@ function App() {
     }
   };
 
-  const openContactConversation = (contact) => {
-    const existingConv = conversations.find(c => c.contact_id === contact.id || c.external_id === contact.external_id);
-    if (existingConv) {
-      setSelectedConv(existingConv);
+  const openContactConversation = async (contact) => {
+    try {
+      const { data: conv } = await axios.post(`${API_BASE}/conversations/ensure`, { contact_id: contact.id });
+      // Recharger les conversations pour être sûr d'avoir la dernière version
+      await preloadData();
+      setSelectedConv(conv);
       setView('inbox');
-    } else {
-      alert(`Infos Contact: ${contact.display_name}\n${contact.phone_number || contact.external_id}`);
+    } catch (err) {
+      console.error('Failed to ensure conversation:', err);
+      alert('Impossible d\'ouvrir la conversation.');
     }
   };
 

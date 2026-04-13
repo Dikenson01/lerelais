@@ -139,6 +139,39 @@ app.get('/api/contacts', async (req, res) => {
   res.json(data || []);
 });
 
+app.post('/api/conversations/ensure', async (req, res) => {
+  const { contact_id } = req.body;
+  if (!contact_id) return res.status(400).json({ error: 'contact_id is required' });
+
+  try {
+    // 1. Chercher le contact
+    const { data: contact, error: contactErr } = await supabase.from('contacts').select('*').eq('id', contact_id).single();
+    if (contactErr || !contact) return res.status(404).json({ error: 'Contact non trouvé' });
+
+    // 2. Chercher ou Créer la conversation
+    let { data: conv, error: convErr } = await supabase.from('conversations').select('*').eq('account_id', contact.account_id).eq('external_id', contact.external_id).maybeSingle();
+    
+    if (!conv) {
+      const { data: newConv, error: createErr } = await supabase.from('conversations').insert({
+        account_id: contact.account_id,
+        external_id: contact.external_id,
+        contact_id: contact.id,
+        platform: 'whatsapp',
+        title: contact.display_name,
+        last_message_at: new Date()
+      }).select().single();
+      
+      if (createErr) throw createErr;
+      conv = newConv;
+    }
+
+    res.json(conv);
+  } catch (err) {
+    logger.error('Error in /api/conversations/ensure:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/messages/:convId', async (req, res) => {
   const { data, error } = await supabase.from('messages').select('*').eq('conversation_id', req.params.convId).order('timestamp', { ascending: true });
   if (error) return res.status(500).json({ error: error.message });
