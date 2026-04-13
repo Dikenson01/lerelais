@@ -162,6 +162,8 @@ function App() {
         setPairingQR(null);
         preloadData();
         setTimeout(() => { setPairingStatus(null); setShowAddModal(false); }, 2000);
+      } else if (res.data.status === 'waiting_lock') {
+        setPairingStatus('waiting_lock');
       }
     } catch (e) {}
   };
@@ -355,9 +357,25 @@ function App() {
             {!pairingStatus && <button className="modal-close" onClick={() => setShowAddModal(false)}><X size={20} /></button>}
             {pairingStatus ? (
               <div className="pairing-view">
-                <h2>{pairingStatus === 'connected' ? '✅ Connecté !' : 'Scannez le code'}</h2>
-                <p>WhatsApp &gt; Appareils connectés</p>
-                <div className="qr-container">{pairingQR ? <div className="qr-box"><QRCode value={pairingQR} size={220} /></div> : <Loader2 className="spinner" size={40} />}</div>
+                <h2>
+                  {pairingStatus === 'connected' ? '✅ Connecté !' : 
+                   pairingStatus === 'waiting_lock' ? '🛡️ Sécurisation...' :
+                   'Scannez le code'}
+                </h2>
+                <p>
+                  {pairingStatus === 'waiting_lock' ? 
+                   'Une autre instance est en cours d\'initialisation. Veuillez patienter.' : 
+                   'WhatsApp > Appareils connectés'}
+                </p>
+                <div className="qr-container">
+                  {pairingStatus === 'waiting_lock' ? (
+                    <div className="waiting-box">
+                      <RefreshCw className="spinner" size={40} />
+                    </div>
+                  ) : (
+                    pairingQR ? <div className="qr-box"><QRCode value={pairingQR} size={220} /></div> : <Loader2 className="spinner" size={40} />
+                  )}
+                </div>
                 {pairingStatus !== 'connected' && <button className="cancel-pairing" onClick={() => { setPairingStatus(null); setPairingId(null); setPairingQR(null); }}>Annuler</button>}
               </div>
             ) : (

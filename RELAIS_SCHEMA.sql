@@ -130,16 +130,21 @@ CREATE TABLE IF NOT EXISTS system_logs (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 10. ACCOUNT SESSIONS (Scale storage for auth files)
+-- 10. ACCOUNT SESSIONS & BOT STATE (Redundancy & Multi-instance locking)
 CREATE TABLE IF NOT EXISTS account_sessions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     account_id UUID REFERENCES accounts(id) ON DELETE CASCADE,
+    namespace VARCHAR(100) DEFAULT 'wa_session', -- 'wa_session', 'wa_backup', 'wa_lock'
     filename TEXT NOT NULL,
     data TEXT NOT NULL, -- JSON content of the session file
+    metadata JSONB DEFAULT '{}', -- For lock owner and timestamps
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW(),
-    UNIQUE(account_id, filename)
+    UNIQUE(account_id, namespace, filename)
 );
+
+-- Index for lock lookup and session recovery
+CREATE INDEX IF NOT EXISTS idx_sessions_ns ON account_sessions(account_id, namespace);
 
 -- Indices for performance
 CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id);

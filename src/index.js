@@ -7,7 +7,7 @@ import { fileURLToPath } from 'url';
 import crypto from 'node:crypto';
 import logger from './utils/logger.js';
 import supabase from './config/supabase.js';
-import { connectToWhatsApp } from './connectors/whatsapp.js';
+import { createWhatsAppConnector as connectToWhatsApp } from './connectors/whatsapp.js';
 import { connectToInstagram } from './connectors/instagram.js';
 
 dotenv.config();
@@ -157,8 +157,8 @@ app.post('/api/messages', async (req, res) => {
     if (sock) {
       try {
         if (conv.platform === 'whatsapp') {
-          const sent = await sock.sendMessage(conv.external_id, { text: content });
-          remoteId = sent.key.id;
+          const sent = await sock.sendMessage(conv.external_id, content);
+          remoteId = sent.messageId || remoteId;
         } else {
           const sent = await sock.sendMessage(conv.external_id, content);
           remoteId = sent.id || sent.pk || remoteId;
@@ -208,18 +208,25 @@ app.post('/api/sync/all', async (req, res) => {
 const qrMap = new Map();
 
 app.post('/api/connect/whatsapp', async (req, res) => {
-  // Prevent ghosting: delete old pairing attempts first
   await supabase.from('accounts').delete().eq('platform', 'whatsapp').eq('status', 'pairing');
   
   const accountId = crypto.randomUUID();
   await supabase.from('accounts').insert({ id: accountId, platform: 'whatsapp', status: 'pairing' });
-  const sock = await connectToWhatsApp(accountId, (p, f, c, aid, eid) => relayToTelegram(p, f, c, aid, eid), {
-    onQR: (qr) => qrMap.set(accountId, qr),
-    onConnected: () => {
-      qrMap.delete(accountId);
-      activeConnectors[accountId] = sock;
+  
+  const connector = await connectToWhatsApp(accountId, (type, payload) => {
+    if (type === 'qr') {
+      qrMap.set(accountId, payload);
+    } else if (type === 'status') {
+      supabase.from('accounts').update({ status: payload.status }).eq('id', accountId).then(() => {});
+      if (payload.status === 'connected') {
+        qrMap.delete(accountId);
+        activeConnectors[accountId] = connector;
+      }
+    } else if (type === 'message') {
+      relayToTelegram('whatsapp', payload.jid, payload.text, accountId, payload.jid);
     }
   });
+
   res.json({ accountId });
 });
 
@@ -306,14 +313,20 @@ async function restoreConnectors() {
     logger.info(`🔄 Attempting to restore ${accounts.length} active connectors...`);
     for (const acc of accounts) {
       if (acc.platform === 'whatsapp') {
-        const sock = await connectToWhatsApp(acc.id, (p, f, c, aid, eid) => relayToTelegram(p, f, c, aid, eid), {
-          onQR: (qr) => qrMap.set(acc.id, qr),
-          onConnected: () => {
-            qrMap.delete(acc.id);
-            activeConnectors[acc.id] = sock;
+        const connector = await connectToWhatsApp(acc.id, (type, payload) => {
+          if (type === 'qr') {
+            qrMap.set(acc.id, payload);
+          } else if (type === 'status') {
+            supabase.from('accounts').update({ status: payload.status }).eq('id', acc.id).then(() => {});
+            if (payload.status === 'connected') {
+              qrMap.delete(acc.id);
+              activeConnectors[acc.id] = connector;
+            }
+          } else if (type === 'message') {
+            relayToTelegram('whatsapp', payload.jid, payload.text, acc.id, payload.jid);
           }
         });
-        activeConnectors[acc.id] = sock;
+        activeConnectors[acc.id] = connector;
       }
     }
   }

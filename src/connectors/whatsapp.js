@@ -5,47 +5,104 @@ import makeWASocket, {
   Browsers,
   delay,
   jidNormalizedUser,
-  BufferJSON
+  BufferJSON,
+  makeCacheableSignalKeyStore
 } from '@whiskeysockets/baileys';
 import { proto } from '@whiskeysockets/baileys';
 import logger from '../utils/logger.js';
 import supabase from '../config/supabase.js';
-import path from 'path';
-import fs from 'fs';
-import { fileURLToPath } from 'url';
+import pino from 'pino';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+/**
+ * MOTEUR IMMORTAL v2 (Style "Tim") 
+ * Incorpore : 
+ * 1. Double sauvegarde (Backup)
+ * 2. Système de Lock anti-collision (Code 440)
+ * 3. Cache de SignalKeyStore (Performance)
+ * 4. Identité Browser fixée
+ */
 
-// --- CUSTOM SUPABASE AUTH STATE ---
-async function useSupabaseAuthState(accountId) {
-  const readData = async (filename) => {
+const useSupabaseAuthState = async (accountId) => {
+  const TABLE = 'account_sessions';
+  
+  // Adaptateur de Namespace par préfixe (Garantit compatibilité sans migration DB)
+  const makeKey = (namespace, filename) => `NS:${namespace}:${filename}`;
+
+  const writeData = async (data, filename, namespace = 'active') => {
     try {
-      const { data } = await supabase.from('account_sessions').select('data').eq('account_id', accountId).eq('filename', filename).single();
-      return data ? JSON.parse(data.data, BufferJSON.reviver) : null;
-    } catch (_) { return null; }
+      const payload = {
+        account_id: accountId,
+        filename: makeKey(namespace, filename),
+        data: JSON.stringify(data, BufferJSON.replacer),
+        updated_at: new Date().toISOString()
+      };
+      await supabase.from(TABLE).upsert(payload, { onConflict: 'account_id, filename' });
+    } catch (e) {
+      logger.error(`[WA-DB] Write error (${namespace}:${filename}):`, e.message);
+    }
   };
 
-  const writeData = async (data, filename) => {
-    const jsonStr = JSON.stringify(data, BufferJSON.replacer);
-    if (!jsonStr || jsonStr === '{}') return;
-    await supabase.from('account_sessions').upsert({
-      account_id: accountId,
-      filename,
-      data: jsonStr
-    }, { onConflict: 'account_id, filename' });
+  const readData = async (filename, namespace = 'active') => {
+    try {
+      const { data, error } = await supabase
+        .from(TABLE)
+        .select('data')
+        .eq('account_id', accountId)
+        .eq('filename', makeKey(namespace, filename))
+        .maybeSingle();
+
+      if (error || !data) {
+        // TENTATIVE DE RESTAURATION DEPUIS LE BACKUP
+        if (namespace === 'active') {
+          const backup = await readData(filename, 'backup');
+          if (backup) {
+             logger.info(`[WA-RECOVERY] Restored ${filename} from backup!`);
+             await writeData(backup, filename, 'active'); // Auto-réparation
+             return backup;
+          }
+        }
+        return null;
+      }
+      return JSON.parse(data.data, BufferJSON.reviver);
+    } catch (e) {
+      return null;
+    }
   };
 
-  const removeData = async (filename) => {
-    await supabase.from('account_sessions').delete().eq('account_id', accountId).eq('filename', filename);
+  const removeData = async (filename, namespace = 'active') => {
+    await supabase.from(TABLE).delete().eq('account_id', accountId).eq('filename', makeKey(namespace, filename));
   };
 
+  const clearSession = async () => {
+    await supabase.from(TABLE).delete().eq('account_id', accountId).like('filename', 'NS:active:%');
+  };
+
+  // --- LOCK SYSTEM (Anti-Conflit 440) ---
+  const myInstanceId = `${process.env.RAILWAY_SERVICE_NAME || 'local'}-${process.pid}`;
+  
+  const checkLock = async () => {
+    const lockData = await readData('lock_session', 'lock');
+    if (!lockData) return null;
+    return { ...lockData, updatedAt: new Date(lockData.ts).getTime() };
+  };
+
+  const claimLock = async () => {
+    const current = await checkLock();
+    // Si lock existant par un autre et frais (< 3 min), on échoue
+    if (current && current.owner !== myInstanceId && (Date.now() - current.updatedAt) < 180000) {
+      return false;
+    }
+    await writeData({ owner: myInstanceId, ts: new Date().toISOString() }, 'lock_session', 'lock');
+    return true;
+  };
+
+  // Chargement initial
   const creds = await readData('creds.json') || initAuthCreds();
 
   return {
     state: {
       creds,
-      keys: {
+      keys: makeCacheableSignalKeyStore({
         get: async (type, ids) => {
           const data = {};
           await Promise.all(ids.map(async id => {
@@ -62,360 +119,174 @@ async function useSupabaseAuthState(accountId) {
           const tasks = [];
           for (const category in data) {
             for (const id in data[category]) {
-              const filename = `${category}-${id}.json`;
               const value = data[category][id];
+              const filename = `${category}-${id}.json`;
               tasks.push(value ? writeData(value, filename) : removeData(filename));
+              
+              // DOUBLE SAUVEGARDE (Backup) des clés critiques
+              if (value && ['creds.json', 'app-state-sync-key'].some(k => filename.includes(k))) {
+                tasks.push(writeData(value, filename, 'backup'));
+              }
             }
           }
           await Promise.all(tasks);
         }
-      }
+      }, pino({ level: 'silent' })),
     },
-    saveCreds: () => writeData(creds, 'creds.json')
+    saveCreds: () => writeData(creds, 'creds.json'),
+    clearSession,
+    claimLock
   };
-}
+};
 
-export async function connectToWhatsApp(accountId, onMessage, onEvents, pairingPhone = null) {
-  logger.info(`🌐 Initializing Immortal Connection for ${accountId}...`);
-  const authPath = path.join(__dirname, `../../auth/wa-${accountId}`);
-  
-  const { state, saveCreds } = await useSupabaseAuthState(accountId);
-  const { version } = await fetchLatestBaileysVersion();
+export const createWhatsAppConnector = async (accountId, onEvent) => {
+  let sock = null;
+  let qrCode = null;
+  let { state, saveCreds, clearSession, claimLock } = await useSupabaseAuthState(accountId);
 
-  const sock = makeWASocket({
-    version,
-    auth: state,
-    printQRInTerminal: false,
-    logger: logger.child({ module: 'baileys', accountId }),
-    browser: Browsers.ubuntu('Chrome'),
-    syncFullHistory: false,
-    shouldSyncHistoryMessage: () => false,
-    getMessage: async () => undefined,
-  });
-
-  // Keep-alive: Heartbeat every 15 minutes
-  const heartbeat = setInterval(async () => {
-    if (sock.authState?.creds?.me) {
-      try {
-        await sock.sendPresenceUpdate('available');
-        logger.info(`💓 Heartbeat sent for ${accountId}`);
-      } catch (e) {
-        logger.warn(`💔 Heartbeat failed for ${accountId}: ${e.message}`);
-      }
-    }
-  }, 15 * 60 * 1000);
-
-  sock._heartbeat = heartbeat;
-
-  sock.ev.on('creds.update', saveCreds);
-
-  // ============================================
-  // 3. SYNC CONTACTS — récupère TOUS les contacts
-  // ============================================
-  const syncContacts = async (contacts) => {
-    if (!contacts || !contacts.length) return;
-    logger.info(`👥 Syncing ${contacts.length} contacts...`);
-
-    const BATCH_SIZE = 50;
-    for (let i = 0; i < contacts.length; i += BATCH_SIZE) {
-      const batch = contacts.slice(i, i + BATCH_SIZE);
-      const contactUpserts = [];
-      const identityUpserts = [];
-
-      for (const contact of batch) {
-        const jid = jidNormalizedUser(contact.id || contact.jid);
-        if (!jid || jid === 'status@broadcast') continue;
-
-        // Note: On supporte maintenant @lid et @s.whatsapp.net
-
-        const phone = jid.split('@')[0];
-        const name = contact.name || contact.verifiedName || contact.notify || phone;
-
-        // Récupérer la photo de profil
-        let avatarUrl = null;
-        try {
-          avatarUrl = await sock.profilePictureUrl(jid, 'image');
-        } catch (_) { /* pas de photo */ }
-
-        identityUpserts.push({ phone, full_name: name });
-        contactUpserts.push({
-          account_id: accountId,
-          external_id: jid,
-          display_name: name,
-          avatar_url: avatarUrl,
-          phone_number: phone,
-          metadata: { source: 'whatsapp', platform: 'whatsapp' }
-        });
-      }
-
-      try {
-        if (identityUpserts.length) {
-          await supabase.from('identities').upsert(identityUpserts, { onConflict: 'phone' });
-        }
-        if (contactUpserts.length) {
-          await supabase.from('contacts').upsert(contactUpserts, { onConflict: 'account_id, external_id' });
-        }
-      } catch (e) { logger.error('Contact Sync Batch Error:', e.message); }
-    }
-    logger.info(`✅ Contacts sync terminé (${contacts.length})`);
-  };
-
-  sock.ev.on('contacts.set', ({ contacts }) => syncContacts(contacts));
-  sock.ev.on('contacts.upsert', (contacts) => syncContacts(contacts));
-  sock.ev.on('contacts.update', (updates) => {
-    // Mettre à jour les noms/avatars des contacts existants
-    const mapped = updates.map(u => ({ id: u.id, jid: u.id, name: u.name || u.notify, ...u }));
-    syncContacts(mapped);
-  });
-
-  // ============================================
-  // 4. SYNC CHATS — récupère TOUTES les conversations
-  // ============================================
-  const findContactId = async (jid) => {
-    try {
-      const { data } = await supabase
-        .from('contacts')
-        .select('id')
-        .eq('account_id', accountId)
-        .eq('external_id', jid)
-        .single();
-      return data?.id || null;
-    } catch (_) { return null; }
-  };
-
-  const syncChats = async (chats) => {
-    if (!chats || !chats.length) return;
-    logger.info(`💬 Syncing ${chats.length} conversations...`);
-
-    for (const chat of chats) {
-      const jid = jidNormalizedUser(chat.id);
-      if (!jid || jid === 'status@broadcast') continue;
-      const isGroup = jid.endsWith('@g.us');
-
-      let contactId = null;
-      if (!isGroup) {
-        contactId = await findContactId(jid);
-        // Si pas de contact, on le crée à la volée
-        if (!contactId) {
-          const phone = jid.split('@')[0];
-          try {
-            const { data: newContact } = await supabase
-              .from('contacts')
-              .upsert({
-                account_id: accountId,
-                external_id: jid,
-                display_name: chat.name || phone,
-                phone_number: phone,
-                metadata: { source: 'whatsapp', platform: 'whatsapp' }
-              }, { onConflict: 'account_id, external_id' })
-              .select('id')
-              .single();
-            if (newContact) contactId = newContact.id;
-          } catch (_) {}
-        }
-      }
-
-      try {
-        await supabase.from('conversations').upsert({
-          account_id: accountId,
-          external_id: jid,
-          platform: 'whatsapp',
-          title: chat.name || (isGroup ? 'Groupe WhatsApp' : jid.split('@')[0]),
-          is_group: isGroup,
-          contact_id: contactId,
-          last_message_preview: chat.conversationTimestamp ? 'Synchronisé' : null,
-          unread_count: chat.unreadCount || 0,
-          last_message_at: new Date(),
-          metadata: { 
-            ...(chat.metadata || {}), 
-            is_archived: chat.archive === true || chat.archived === true 
-          }
-        }, { onConflict: 'account_id, external_id' });
-      } catch (e) { logger.error('Chat Upsert Error:', e.message); }
-    }
-    logger.info(`✅ Conversations sync terminé (${chats.length})`);
-  };
-
-  sock.ev.on('chats.set', ({ chats }) => syncChats(chats));
-  sock.ev.on('chats.upsert', (chats) => syncChats(chats));
-  sock.ev.on('chats.update', (updates) => syncChats(updates));
-
-  // ============================================
-  // 5. SYNC HISTORIQUE — capture l'historique complet
-  // ============================================
-  sock.ev.on('messaging-history.set', async ({ chats, contacts, messages, isLatest }) => {
-    logger.info(`📜 History sync: ${chats?.length || 0} chats, ${contacts?.length || 0} contacts, ${messages?.length || 0} msgs, isLatest=${isLatest}`);
-    if (contacts?.length) await syncContacts(contacts);
-    if (chats?.length) await syncChats(chats);
-
-    // Sauvegarder les messages de l'historique
-    if (messages?.length) {
-      for (const msg of messages) {
-        try {
-          const jid = jidNormalizedUser(msg.key?.remoteJid);
-          if (!jid || jid === 'status@broadcast') continue;
-
-          const content = msg.message?.conversation
-            || msg.message?.extendedTextMessage?.text
-            || (msg.message?.imageMessage ? '[Image]'
-            : msg.message?.videoMessage ? '[Vidéo]'
-            : msg.message?.audioMessage ? '[Audio]'
-            : msg.message?.documentMessage ? '[Document]'
-            : msg.message?.stickerMessage ? '[Sticker]'
-            : '[Média]');
-
-          // Trouver ou créer la conversation
-          const { data: conv } = await supabase
-            .from('conversations')
-            .select('id')
-            .eq('account_id', accountId)
-            .eq('external_id', jid)
-            .single();
-
-          if (conv) {
-            await supabase.from('messages').upsert({
-              conversation_id: conv.id,
-              account_id: accountId,
-              remote_id: msg.key.id,
-              sender_id: msg.key.fromMe ? 'me' : jid,
-              content: content || '',
-              is_from_me: !!msg.key.fromMe,
-              timestamp: new Date((msg.messageTimestamp || Date.now() / 1000) * 1000)
-            }, { onConflict: 'remote_id' });
-          }
-        } catch (_) {}
-      }
-      logger.info(`✅ ${messages.length} messages historiques sauvegardés`);
-    }
-  });
-
-  // ============================================
-  // 6. CONNEXION & RECONNEXION
-  // ============================================
-  sock.ev.on('connection.update', async (update) => {
-    const { connection, lastDisconnect, qr } = update;
-    if (qr) {
-      if (onEvents?.onQR) onEvents.onQR(qr);
-      
-      // Sauvegarder en image pour /whatsapp-qr
-      try {
-        const qrcode = await import('qrcode');
-        const publicPath = path.join(__dirname, '../../web/dist/whatsapp_qr.png');
-        // Ensure directory exists
-        if (!fs.existsSync(path.dirname(publicPath))) fs.mkdirSync(path.dirname(publicPath), { recursive: true });
-        await qrcode.default.toFile(publicPath, qr);
-      } catch (e) {
-        logger.error('QR Image Save Error:', e.message);
-      }
+  const startSocket = async () => {
+    // 1. Tenter de prendre le verrou
+    const hasLock = await claimLock();
+    if (!hasLock) {
+      logger.warn(`[WA-LOCK] Session locked by another instance. Retrying in 30s...`);
+      onEvent('status', { status: 'waiting_lock', message: 'En attente de connexion sécurisée...' });
+      setTimeout(startSocket, 30000);
+      return;
     }
 
-    // --- PAIRING CODE LOGIC ---
-    if (pairingPhone && !sock.authState.creds.registered && qr) {
-       // Demande du code après 10s pour laisser le temps à la socket de se stabiliser
-       if (!sock._pairingRequested) {
-         sock._pairingRequested = true;
-         logger.info(`📡 [WA] Demande de Pairing Code pour ${pairingPhone} dans 10s...`);
-         setTimeout(async () => {
-           try {
-             const code = await sock.requestPairingCode(pairingPhone.replace(/\D/g, ''));
-             logger.info(`✅ [WA] Pairing Code Reçu : ${code}`);
-             if (onEvents?.onPairingCode) onEvents.onPairingCode(code);
-           } catch (err) {
-             logger.error('Pairing Code Request Error:', err.message);
-           }
-         }, 10000);
-       }
-    }
+    const { version } = await fetchLatestBaileysVersion();
+    
+    sock = makeWASocket({
+      version,
+      auth: state,
+      printQRInTerminal: false,
+      browser: Browsers.ubuntu('Chrome'), // Identité stable
+      logger: pino({ level: 'silent' }),
+      syncFullHistory: false,
+      markOnlineOnConnect: true,
+      retryRequestDelayMs: 5000,
+    });
 
-    if (connection === 'close') {
-      if (sock._heartbeat) clearInterval(sock._heartbeat);
-      const statusCode = lastDisconnect?.error?.output?.statusCode;
-      if (statusCode !== DisconnectReason.loggedOut) {
-        logger.info('🔄 Reconnexion automatique dans 5s...');
-        setTimeout(() => connectToWhatsApp(accountId, onMessage, onEvents, pairingPhone), 5000);
+    // Heartbeat Lock (Renouveler le verrou chaque minute)
+    const lockTimer = setInterval(async () => {
+      if (sock && (await claimLock())) {
+        // Lock renewed
       } else {
-        logger.info('❌ Session WhatsApp déconnectée (logout)');
-        await supabase.from('accounts').update({ status: 'disconnected' }).eq('id', accountId);
-        if (fs.existsSync(authPath)) fs.rmSync(authPath, { recursive: true, force: true });
+        logger.error('[WA-LOCK] Port du verrou perdu !');
       }
-    } else if (connection === 'open') {
-      logger.info(`🚀 WhatsApp Connecté pour ${accountId}`);
-      await supabase.from('accounts').update({ status: 'connected' }).eq('id', accountId);
-      if (onEvents?.onConnected) onEvents.onConnected();
-    }
-  });
+    }, 60000);
 
-  // ============================================
-  // 7. NOUVEAUX MESSAGES EN TEMPS RÉEL
-  // ============================================
-  sock.ev.on('messages.upsert', async ({ messages, type }) => {
-    if (type !== 'notify') return;
-    for (const msg of messages) {
-      const jid = jidNormalizedUser(msg.key.remoteJid);
-      if (!jid || jid === 'status@broadcast') continue;
+    sock.ev.on('creds.update', async () => {
+      await saveCreds();
+      // Toujours faire un backup des creds lors de l'update
+      const { state: newState } = await useSupabaseAuthState(accountId);
+      const activeCreds = newState.creds;
+      // Note: useSupabaseAuthState wrap already handles backups in set() but creds.json is manual here
+      // Manual backup for top level creds
+      const TABLE = 'account_sessions';
+      await supabase.from(TABLE).upsert({
+        account_id: accountId,
+        filename: `NS:backup:creds.json`,
+        data: JSON.stringify(activeCreds, BufferJSON.replacer),
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'account_id, filename' });
+    });
 
-      const content = msg.message?.conversation
-        || msg.message?.extendedTextMessage?.text
-        || (msg.message?.imageMessage ? '[Image]'
-        : msg.message?.videoMessage ? '[Vidéo]'
-        : msg.message?.audioMessage ? '[Audio]'
-        : msg.message?.documentMessage ? '[Document]'
-        : msg.message?.stickerMessage ? '[Sticker]'
-        : '[Média]');
+    sock.ev.on('connection.update', async (update) => {
+      const { connection, lastDisconnect, qr } = update;
 
-      try {
-        const mediaTag = msg.message?.imageMessage ? 'image' 
-                        : msg.message?.audioMessage ? 'audio' 
-                        : msg.message?.videoMessage ? 'video' 
-                        : msg.message?.documentMessage ? 'document' : null;
+      if (qr) {
+        qrCode = qr;
+        onEvent('qr', qr);
+        onEvent('status', { status: 'pairing' });
+      }
 
-        // Trouver/créer le contact pour garantir l'avatar et le nom
-        let contactId = null;
-        if (!jid.endsWith('@g.us')) {
-          const phone = jid.split('@')[0];
-          try {
-            const { data: ct } = await supabase.from('contacts').upsert({
-              account_id: accountId,
-              external_id: jid,
-              display_name: msg.pushName || phone,
-              phone_number: phone,
-              metadata: { platform: 'whatsapp' }
-            }, { onConflict: 'account_id, external_id' }).select('id').single();
-            if (ct) contactId = ct.id;
-          } catch (_) {}
+      if (connection === 'close') {
+        clearInterval(lockTimer);
+        const shouldReconnect = (lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut;
+        const statusCode = lastDisconnect?.error?.output?.statusCode;
+        
+        logger.warn(`[WA] Connection closed: ${statusCode}. Reconnect: ${shouldReconnect}`);
+
+        if (statusCode === DisconnectReason.loggedOut) {
+          logger.error('[WA] Logged out! Clearing session...');
+          await clearSession();
+          onEvent('status', { status: 'disconnected' });
+        } else if (statusCode === 440 || statusCode === 405) {
+          // Conflit ou session expirée
+          logger.info('[WA-STABILITY] Conflict or Expired. Waiting 10s before retry...');
+          setTimeout(startSocket, 10000);
+        } else {
+          startSocket();
         }
+      }
 
-        // Upsert conversation avec contact_id
+      if (connection === 'open') {
+        qrCode = null;
+        onEvent('status', { status: 'connected' });
+        logger.info('[WA] Connected successfully!');
+      }
+    });
+
+    sock.ev.on('contacts.upsert', async (contacts) => {
+      for (const contact of contacts) {
+        const jid = jidNormalizedUser(contact.id);
+        await supabase.from('contacts').upsert({
+          account_id: accountId,
+          external_id: jid,
+          display_name: contact.name || contact.notify || jid.split('@')[0],
+          avatar_url: null,
+          metadata: { lid: contact.id.endsWith('@lid') ? contact.id : null }
+        }, { onConflict: 'account_id, external_id' });
+      }
+    });
+
+    sock.ev.on('messages.upsert', async ({ messages, type }) => {
+      if (type !== 'notify') return;
+
+      for (const msg of messages) {
+        if (!msg.message || msg.key.fromMe) continue;
+
+        const jid = jidNormalizedUser(msg.key.remoteJid);
+        const text = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
+        
+        // Sync conversation
         const { data: conv } = await supabase.from('conversations').upsert({
           account_id: accountId,
           external_id: jid,
           platform: 'whatsapp',
-          contact_id: contactId,
           title: msg.pushName || jid.split('@')[0],
-          last_message_preview: content?.slice(0, 100),
-          last_message_at: new Date()
-        }, { onConflict: 'account_id, external_id' }).select('id').single();
+          last_message_preview: text.substring(0, 100),
+          updated_at: new Date()
+        }, { onConflict: 'account_id, external_id' }).select().single();
 
         if (conv) {
-          // Utiliser UPSERT pour les messages pour éviter les erreurs de doublons 409/500
-          await supabase.from('messages').upsert({
+          await supabase.from('messages').insert({
             conversation_id: conv.id,
             account_id: accountId,
             remote_id: msg.key.id,
-            sender_id: msg.key.fromMe ? 'me' : jid,
-            content: content || '',
-            is_from_me: !!msg.key.fromMe,
-            media_type: mediaTag,
-            timestamp: new Date((msg.messageTimestamp || Date.now() / 1000) * 1000)
-          }, { onConflict: 'remote_id' });
+            sender_id: jid,
+            content: text,
+            is_from_me: false,
+            timestamp: new Date(msg.messageTimestamp * 1000)
+          });
+          
+          onEvent('message', { jid, text, fromMe: false });
         }
-      } catch (e) { logger.error('Message Save Error:', e.message); }
-
-      if (onMessage && !msg.key.fromMe) {
-        onMessage('whatsapp', msg.pushName || jid, content, accountId, jid);
       }
-    }
-  });
+    });
+  };
 
-  return sock;
-}
+  await startSocket();
+
+  return {
+    sendMessage: async (jid, text) => {
+      if (!sock) return { success: false, error: 'Not connected' };
+      const result = await sock.sendMessage(jid, { text });
+      return { success: true, messageId: result.key.id };
+    },
+    disconnect: async () => {
+      if (sock) sock.end();
+    }
+  };
+};
