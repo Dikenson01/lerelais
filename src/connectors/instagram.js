@@ -63,7 +63,7 @@ export async function connectToInstagram(accountId, username, password, onMessag
                 platform: 'instagram',
                 title: sender.full_name || sender.username,
                 last_message_preview: content,
-                updated_at: new Date()
+                last_message_at: new Date()
               }, { onConflict: 'account_id, external_id' })
               .select().single();
 
