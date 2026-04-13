@@ -1,12 +1,13 @@
 import makeWASocket, {
   DisconnectReason,
-  initAuthenticationState,
+  initAuthCreds,
   fetchLatestBaileysVersion,
   Browsers,
   delay,
   jidNormalizedUser,
   BufferJSON
 } from '@whiskeysockets/baileys';
+import { proto } from '@whiskeysockets/baileys';
 import logger from '../utils/logger.js';
 import supabase from '../config/supabase.js';
 import path from 'path';
@@ -39,7 +40,7 @@ async function useSupabaseAuthState(accountId) {
     await supabase.from('account_sessions').delete().eq('account_id', accountId).eq('filename', filename);
   };
 
-  const creds = await readData('creds.json') || initAuthenticationState().creds;
+  const creds = await readData('creds.json') || initAuthCreds();
 
   return {
     state: {
@@ -49,7 +50,10 @@ async function useSupabaseAuthState(accountId) {
           const data = {};
           await Promise.all(ids.map(async id => {
             const filename = `${type}-${id}.json`;
-            const val = await readData(filename);
+            let val = await readData(filename);
+            if (type === 'app-state-sync-key' && val) {
+              val = proto.Message.AppStateSyncKeyData.fromObject(val);
+            }
             if (val) data[id] = val;
           }));
           return data;
