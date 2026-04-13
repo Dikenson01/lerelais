@@ -208,12 +208,16 @@ app.post('/api/messages', async (req, res) => {
       conversation_id: conversationId,
       account_id: conv.account_id,
       remote_id: remoteId,
+      sender_id: conv.account_id, // Utilise l'ID du compte comme expéditeur par défaut
       content,
       is_from_me: true,
       timestamp: new Date()
     }).select().single();
 
-    if (insertError) throw insertError;
+    if (insertError) {
+      logger.error(`[SQL-ERR] Failed to insert message: ${insertError.message}`);
+      throw insertError;
+    }
 
     // Mise à jour MIROIR : On remonte la discussion
     await supabase.from('conversations').update({ 

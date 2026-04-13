@@ -386,39 +386,35 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
       return data?.id;
     };
 
-    // --- RESOLUTION UNIFIÉE RADICALE (Miroir V3) ---
     const getOrCreateUnifiedConversation = async (jid, title, isGroup = false) => {
       // 1. Déterminer l'ID du contact
-      let contact_id = await getContactId(jid);
+      let contact_id = await getContactId(jid, isGroup ? null : title);
       
-      // 2. Tenter de trouver une conversation existante liée à ce CONTACT (Priorité absolue)
+      // 2. Tenter de trouver une conversation existante liée à ce CONTACT (Iron Resolver)
       if (contact_id) {
-        const { data: existing } = await supabase.from('conversations')
+        const { data: existingConvs } = await supabase.from('conversations')
           .select('id, external_id')
           .eq('account_id', accountId)
           .eq('contact_id', contact_id)
-          .maybeSingle();
+          .order('last_message_at', { ascending: false });
         
-        if (existing) {
-          // Si le JID technique a changé (PN -> LID), on met à jour pour pouvoir répondre
-          if (existing.external_id !== jid) {
-            await supabase.from('conversations').update({ external_id: jid, title: title || existing.title }).eq('id', existing.id);
+        if (existingConvs && existingConvs.length > 0) {
+          const master = existingConvs[0];
+          // Si on a des doublons, on les marquera pour fusion dans le cycle de maintenance
+          // mais on renvoie déjà le MASTER pour les nouveaux messages
+          if (master.external_id !== jid) {
+            await supabase.from('conversations').update({ external_id: jid, title: title || master.title }).eq('id', master.id);
           }
-          return existing.id;
+          return master.id;
         }
       }
 
-      // 3. Sinon, on cherche par le JID exact (pour les groupes ou contacts inconnus)
-      const { data: byJid } = await supabase.from('conversations')
-        .select('id')
-        .eq('account_id', accountId)
-        .eq('external_id', jid)
-        .maybeSingle();
-      
+      // 3. Sinon, par JID exact
+      const { data: byJid } = await supabase.from('conversations').select('id').eq('account_id', accountId).eq('external_id', jid).maybeSingle();
       if (byJid) return byJid.id;
 
-      // 4. Création si vraiment nouveau
-      const { data: conv, error } = await supabase.from('conversations').upsert({
+      // 4. Création
+      const { data: conv } = await supabase.from('conversations').upsert({
         account_id: accountId,
         external_id: jid,
         contact_id: contact_id,
@@ -428,7 +424,6 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
         last_message_at: new Date()
       }, { onConflict: 'account_id, external_id' }).select('id').single();
 
-      if (error) logger.error(`[WA-DB-UNIFY-ERR] ${jid}: ${error.message}`);
       return conv?.id;
     };
 
