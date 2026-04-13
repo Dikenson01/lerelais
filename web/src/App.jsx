@@ -137,6 +137,10 @@ function App() {
 
   const formatPhone = (phone) => {
     if (!phone) return '';
+    // Si c'est un identifiant LID technique (commence par 9 et est très long)
+    if (phone.length > 13 && (phone.startsWith('9') || phone.startsWith('1'))) {
+      return 'WhatsApp'; // Masquer l'ID technique
+    }
     if (phone.startsWith('33') && phone.length >= 11) {
       return `+${phone.slice(0, 2)} ${phone.slice(2, 3)} ${phone.slice(3, 5)} ${phone.slice(5, 7)} ${phone.slice(7, 9)} ${phone.slice(9, 11)}`;
     }

@@ -237,6 +237,32 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
         qrCode = null;
         onEvent('status', { status: 'connected' });
         logger.info('[WA] Connected successfully!');
+
+        // --- MAINTENANCE DE POST-CONNEXION (Générique pour tous) ---
+        setTimeout(async () => {
+          logger.info('[WA-MAINTENANCE] Starting background cleanup...');
+          const { data: convs } = await supabase.from('conversations').select('id, external_id').is('contact_id', null);
+          if (convs) {
+            for (const conv of convs) {
+              const contact_id = await getContactId(conv.external_id);
+              if (contact_id) {
+                await supabase.from('conversations').update({ contact_id }).eq('id', conv.id);
+              }
+            }
+          }
+          // Scan PDP pour tous les contacts sans photo
+          const { data: contacts } = await supabase.from('contacts').select('id, external_id').is('avatar_url', null);
+          if (contacts) {
+            for (const contact of contacts) {
+              try {
+                const url = await sock.profilePictureUrl(contact.external_id, 'image').catch(() => null);
+                if (url) await supabase.from('contacts').update({ avatar_url: url }).eq('id', contact.id);
+                await delay(1000); // Éviter le bannissement pour requêtes trop rapides
+              } catch (e) {}
+            }
+          }
+          logger.info('[WA-MAINTENANCE] Cleanup finished.');
+        }, 60000); // 1 minute après la connexion
       }
     });
 
@@ -273,9 +299,22 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
 
     // --- HELPERS POUR LA SYNCHRO ---
     const getContactId = async (jid) => {
-      const { data } = await supabase.from('contacts').select('id, avatar_url').eq('external_id', jid).maybeSingle();
+      // 1. Recherche par JID exact (PN ou LID)
+      let { data } = await supabase.from('contacts').select('id, avatar_url, phone_number').eq('account_id', accountId).eq('external_id', jid).maybeSingle();
+      
+      // 2. Si non trouvé et c'est un LID, tenter de trouver via le mapping interne
+      if (!data && jid.endsWith('@lid')) {
+        const lid = jid.split('@')[0];
+        const { data: mapping } = await supabase.from('contacts')
+          .select('id, avatar_url')
+          .eq('account_id', accountId)
+          .filter('metadata->lid', 'eq', jid)
+          .maybeSingle();
+        data = mapping;
+      }
+
       if (data && !data.avatar_url) {
-        // Tenter de récupérer l'avatar si manquant
+        // Tenter de récupérer l'avatar si manquant (Generic pour tous)
         try {
           const url = await sock.profilePictureUrl(jid, 'image').catch(() => null);
           if (url) await supabase.from('contacts').update({ avatar_url: url }).eq('id', data.id);
@@ -362,21 +401,35 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
     sock.ev.on('contacts.upsert', async (contacts) => {
       for (const contact of contacts) {
         const jid = jidNormalizedUser(contact.id);
+        const lid = contact.id.endsWith('@lid') ? jid : null;
+        
         await supabase.from('contacts').upsert({
           account_id: accountId,
           external_id: jid,
           display_name: contact.name || contact.notify || jid.split('@')[0],
           avatar_url: null,
-          metadata: { lid: contact.id.endsWith('@lid') ? contact.id : null }
+          metadata: { lid: lid }
         }, { onConflict: 'account_id, external_id' });
       }
     });
 
     sock.ev.on('contacts.update', async (updates) => {
       for (const update of updates) {
+        const jid = jidNormalizedUser(update.id);
+        
+        // 1. Mise à jour PDP
         if (update.imgUrl !== undefined) {
-           const jid = jidNormalizedUser(update.id);
            await supabase.from('contacts').update({ avatar_url: update.imgUrl }).eq('account_id', accountId).eq('external_id', jid);
+        }
+
+        // 2. Mapping LID ↔ PN (Générique)
+        if (update.lid || update.phoneNumber) {
+          await supabase.from('contacts').upsert({
+            account_id: accountId,
+            external_id: jid,
+            display_name: update.name || update.notify || jid.split('@')[0],
+            metadata: { lid: update.lid || null, pn: update.phoneNumber || null }
+          }, { onConflict: 'account_id, external_id' });
         }
       }
     });
