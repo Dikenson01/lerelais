@@ -30,14 +30,24 @@ const useSupabaseAuthState = async (accountId) => {
 
   const writeData = async (data, filename, ns_group = 'active') => {
     try {
-      const payload = {
+      const key = makeKey(ns_group, filename);
+      // Pattern robuste : Nettoyage avant insertion pour éviter les erreurs de contraintes
+      await supabase.from(TABLE).delete().eq('account_id', accountId).eq('filename', key);
+      
+      const { error } = await supabase.from(TABLE).insert({
         account_id: accountId,
-        filename: makeKey(ns_group, filename),
+        filename: key,
         data: JSON.stringify(data, BufferJSON.replacer)
-      };
-      await supabase.from(TABLE).upsert(payload, { onConflict: 'account_id, filename' });
+      });
+      
+      if (error) {
+        logger.error(`[WA-DB-WRITE-ERR] ${key}: ${error.message}`);
+      } else {
+        // Log discret en info pour confirmer la persistance
+        if (filename === 'creds.json') logger.info(`[WA-DB] Persisted creds for ${accountId} (${ns_group})`);
+      }
     } catch (e) {
-      logger.error(`[WA-DB] Write error (${ns_group}:${filename}):`, e.message);
+      logger.error(`[WA-DB] Write exception (${ns_group}:${filename}):`, e.message);
     }
   };
 
@@ -183,11 +193,14 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
       // Note: useSupabaseAuthState wrap already handles backups in set() but creds.json is manual here
       // Manual backup for top level creds
       const TABLE = 'account_sessions';
-      await supabase.from(TABLE).upsert({
+      const key = `NS:backup:creds.json`;
+      await supabase.from(TABLE).delete().eq('account_id', accountId).eq('filename', key);
+      await supabase.from(TABLE).insert({
         account_id: accountId,
-        filename: `NS:backup:creds.json`,
+        filename: key,
         data: JSON.stringify(activeCreds, BufferJSON.replacer)
-      }, { onConflict: 'account_id, filename' });
+      });
+      logger.info(`[WA-DB] Backup creds updated for ${accountId}`);
     });
 
     sock.ev.on('connection.update', async (update) => {

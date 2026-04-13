@@ -371,5 +371,11 @@ async function start() {
 
 start();
 
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
+process.once('SIGINT', () => {
+  bot.stop('SIGINT');
+  setTimeout(() => process.exit(0), 1000);
+});
+process.once('SIGTERM', () => {
+  bot.stop('SIGTERM');
+  setTimeout(() => process.exit(0), 1000);
+});
