@@ -68,21 +68,32 @@ app.post('/api/messages', async (req, res) => {
     if (!conv) return res.status(404).json({ error: 'Conversation not found' });
 
     const sock = activeConnectors[conv.account_id];
+    let remoteId = null;
     if (sock) {
-      if (conv.platform === 'whatsapp') {
-        await sock.sendMessage(conv.external_id, { text: content });
-      } else {
-        await sock.sendMessage(conv.external_id, content);
+      try {
+        if (conv.platform === 'whatsapp') {
+          const sent = await sock.sendMessage(conv.external_id, { text: content });
+          remoteId = sent.key.id;
+        } else {
+          const sent = await sock.sendMessage(conv.external_id, content);
+          remoteId = sent.id || sent.pk;
+        }
+      } catch (sendErr) {
+        logger.error(`Failed to send via ${conv.platform}:`, sendErr.message);
+        return res.status(503).json({ error: 'Account disconnected or platform error' });
       }
     }
 
-    const { data: msg } = await supabase.from('messages').insert({
+    const { data: msg, error: insertError } = await supabase.from('messages').upsert({
       conversation_id: conversationId,
       account_id: conv.account_id,
+      remote_id: remoteId, // Use the real ID from platform
       content,
       is_from_me: true,
       timestamp: new Date()
-    }).select().single();
+    }, { onConflict: 'remote_id' }).select().single();
+
+    if (insertError) throw insertError;
 
     await supabase.from('conversations').update({ last_message_preview: content, last_message_at: new Date() }).eq('id', conversationId);
     res.json(msg);
@@ -164,6 +175,28 @@ app.use((req, res, next) => {
 
 // --- LIFECYCLE ---
 
+async function repairContactLinks() {
+  logger.info('🔧 Running maintenance: Repairing contact links...');
+  const { data: orphans } = await supabase.from('conversations').select('id, external_id, account_id').is('contact_id', null);
+  
+  if (orphans && orphans.length > 0) {
+    for (const conv of orphans) {
+      if (conv.external_id.endsWith('@g.us')) continue; // Ignore groups for now
+      const { data: contact } = await supabase
+        .from('contacts')
+        .select('id')
+        .eq('account_id', conv.account_id)
+        .eq('external_id', conv.external_id)
+        .single();
+      
+      if (contact) {
+        await supabase.from('conversations').update({ contact_id: contact.id }).eq('id', conv.id);
+      }
+    }
+    logger.info(`✅ Repaired ${orphans.length} conversation-contact links`);
+  }
+}
+
 async function cleanupStaleAccounts() {
   const thirtyMinsAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
   const { data: stale } = await supabase
@@ -176,6 +209,7 @@ async function cleanupStaleAccounts() {
 
 async function restoreConnectors() {
   await cleanupStaleAccounts();
+  await repairContactLinks();
   const { count: accCount } = await supabase.from('accounts').select('*', { count: 'exact', head: true });
   const { count: convCount } = await supabase.from('conversations').select('*', { count: 'exact', head: true });
   logger.info(`🔍 Startup DB Check: ${accCount || 0} accounts, ${convCount || 0} conversations in DB`);

@@ -111,6 +111,7 @@ function App() {
       fetchMessages(selectedConv.id);
     } catch (err) {
       console.error('Send failed:', err);
+      alert(err.response?.data?.error || 'Erreur lors de l\'envoi. Vérifiez que votre compte WhatsApp est bien connecté.');
       setNewMessage(text); // Restore on failure
     }
   };

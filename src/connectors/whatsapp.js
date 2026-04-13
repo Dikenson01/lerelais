@@ -320,7 +320,8 @@ export async function connectToWhatsApp(accountId, onMessage, onEvents) {
         }, { onConflict: 'account_id, external_id' }).select('id').single();
 
         if (conv) {
-          await supabase.from('messages').insert({
+          // Utiliser UPSERT pour les messages pour éviter les erreurs de doublons 409/500
+          await supabase.from('messages').upsert({
             conversation_id: conv.id,
             account_id: accountId,
             remote_id: msg.key.id,
@@ -329,7 +330,7 @@ export async function connectToWhatsApp(accountId, onMessage, onEvents) {
             is_from_me: !!msg.key.fromMe,
             media_type: mediaTag,
             timestamp: new Date((msg.messageTimestamp || Date.now() / 1000) * 1000)
-          });
+          }, { onConflict: 'remote_id' });
         }
       } catch (e) { logger.error('Message Save Error:', e.message); }
 
