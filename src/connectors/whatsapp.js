@@ -43,7 +43,7 @@ export async function connectToWhatsApp(accountId, onMessage, onEvents) {
     auth: state,
     printQRInTerminal: false,
     logger: logger.child({ module: 'baileys', accountId }),
-    browser: Browsers.macOS('Desktop'),
+    browser: Browsers.ubuntu('Chrome'),
     syncFullHistory: true,
     shouldSyncHistoryMessage: () => true,
     getMessage: async () => undefined,
@@ -60,13 +60,19 @@ export async function connectToWhatsApp(accountId, onMessage, onEvents) {
   sock.ev.on('creds.update', async () => {
     await saveCreds();
     try {
-      const files = fs.readdirSync(authPath).filter(f => f.endsWith('.json'));
-      const upserts = files.map(f => ({
-        account_id: accountId,
-        filename: f,
-        data: fs.readFileSync(path.join(authPath, f), 'utf-8')
-      }));
-      await supabase.from('account_sessions').upsert(upserts, { onConflict: 'account_id, filename' });
+      const upserts = files.map(f => {
+        const content = fs.readFileSync(path.join(authPath, f), 'utf-8');
+        if (!content || content.length < 2) return null; // Safety check
+        return {
+          account_id: accountId,
+          filename: f,
+          data: content
+        };
+      }).filter(Boolean);
+      
+      if (upserts.length > 0) {
+        await supabase.from('account_sessions').upsert(upserts, { onConflict: 'account_id, filename' });
+      }
     } catch (e) { logger.error('Creds Save Error:', e.message); }
   });
 
@@ -85,7 +91,9 @@ export async function connectToWhatsApp(accountId, onMessage, onEvents) {
 
       for (const contact of batch) {
         const jid = jidNormalizedUser(contact.id || contact.jid);
-        if (!jid || jid.endsWith('@g.us') || jid === 'status@broadcast' || jid.endsWith('@lid')) continue;
+        if (!jid || jid === 'status@broadcast') continue;
+
+        // Note: On supporte maintenant @lid et @s.whatsapp.net
 
         const phone = jid.split('@')[0];
         const name = contact.name || contact.verifiedName || contact.notify || phone;

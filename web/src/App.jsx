@@ -111,7 +111,13 @@ function App() {
       fetchMessages(selectedConv.id);
     } catch (err) {
       console.error('Send failed:', err);
-      alert(err.response?.data?.error || 'Erreur lors de l\'envoi. Vérifiez que votre compte WhatsApp est bien connecté.');
+      if (err.response?.status === 503) {
+        alert('Session déconnectée. Veuillez scanner à nouveau le QR Code.');
+        setShowAddModal(true);
+        startWhatsAppPairing();
+      } else {
+        alert(err.response?.data?.error || 'Erreur lors de l\'envoi. Vérifiez que votre compte WhatsApp est bien connecté.');
+      }
       setNewMessage(text); // Restore on failure
     }
   };
@@ -159,6 +165,24 @@ function App() {
       }
     } catch (e) {}
   };
+
+  // 0. AUTO-QR: Récupérer le QR même pour un compte déjà existant
+  useEffect(() => {
+    const fetchUniversalQR = async () => {
+      const waAcc = accounts.find(a => a.platform === 'whatsapp');
+      if (waAcc && !pairingId) {
+        try {
+          const res = await axios.get(`${API_BASE}/connect/whatsapp/status/${waAcc.id}`);
+          if (res.data.qr && !pairingQR) {
+             setPairingQR(res.data.qr);
+             setPairingStatus('waiting_qr');
+             setPairingId(waAcc.id);
+          }
+        } catch (e) {}
+      }
+    };
+    if (view === 'inbox' || view === 'settings') fetchUniversalQR();
+  }, [accounts, view]);
 
   // 7. ARCHIVES: Filtrage des conversations archivées
   const filteredConvs = conversations.filter(c => {

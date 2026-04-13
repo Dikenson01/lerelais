@@ -222,7 +222,13 @@ async function restoreConnectors() {
     logger.info(`🔄 Attempting to restore ${accounts.length} active connectors...`);
     for (const acc of accounts) {
       if (acc.platform === 'whatsapp') {
-        const sock = await connectToWhatsApp(acc.id, (p, f, c, aid, eid) => relayToTelegram(p, f, c, aid, eid));
+        const sock = await connectToWhatsApp(acc.id, (p, f, c, aid, eid) => relayToTelegram(p, f, c, aid, eid), {
+          onQR: (qr) => qrMap.set(acc.id, qr),
+          onConnected: () => {
+            qrMap.delete(acc.id);
+            activeConnectors[acc.id] = sock;
+          }
+        });
         activeConnectors[acc.id] = sock;
       }
     }
