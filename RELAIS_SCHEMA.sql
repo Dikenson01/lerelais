@@ -15,10 +15,11 @@ CREATE TABLE IF NOT EXISTS accounts (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 2. CONTACT IDENTITIES (For merging same person on multiple platforms)
+-- 2. CONTACT IDENTITIES (Unique person logic)
 CREATE TABLE IF NOT EXISTS identities (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     full_name VARCHAR(255),
+    phone VARCHAR(50) UNIQUE, -- Unified key for cross-platform linking
     email VARCHAR(255),
     tags TEXT[],
     metadata JSONB DEFAULT '{}',
@@ -43,11 +44,13 @@ CREATE TABLE IF NOT EXISTS conversations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     account_id UUID REFERENCES accounts(id) ON DELETE CASCADE,
     contact_id UUID REFERENCES contacts(id) ON DELETE SET NULL, -- NULL for groups
-    external_id VARCHAR(255) NOT NULL, -- ThreadID
+    external_id VARCHAR(255) NOT NULL, -- JID (WA) or ThreadID
     platform VARCHAR(50) NOT NULL,
     title VARCHAR(255),
     is_group BOOLEAN DEFAULT FALSE,
+    unread_count INTEGER DEFAULT 0,
     last_message_preview TEXT,
+    group_metadata JSONB DEFAULT '{}', -- Store members, admins, description
     metadata JSONB DEFAULT '{}',
     updated_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE(account_id, external_id)
@@ -127,9 +130,21 @@ CREATE TABLE IF NOT EXISTS system_logs (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- 10. ACCOUNT SESSIONS (Scale storage for auth files)
+CREATE TABLE IF NOT EXISTS account_sessions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    account_id UUID REFERENCES accounts(id) ON DELETE CASCADE,
+    filename TEXT NOT NULL,
+    data TEXT NOT NULL, -- JSON content of the session file
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(account_id, filename)
+);
+
 -- Indices for performance
 CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_conversations_account ON conversations(account_id);
 CREATE INDEX IF NOT EXISTS idx_contacts_account ON contacts(account_id);
 CREATE INDEX IF NOT EXISTS idx_contacts_identity ON contacts(identity_id);
+CREATE INDEX IF NOT EXISTS idx_contacts_phone ON identities(phone);

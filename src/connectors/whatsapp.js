@@ -3,8 +3,8 @@ import makeWASocket, {
   useMultiFileAuthState, 
   fetchLatestBaileysVersion,
   Browsers,
-  downloadMediaMessage,
-  delay
+  delay,
+  jidNormalizedUser
 } from '@whiskeysockets/baileys';
 import logger from '../utils/logger.js';
 import supabase from '../config/supabase.js';
@@ -19,191 +19,170 @@ export async function connectToWhatsApp(accountId, onMessage, onEvents) {
   const authPath = path.join(__dirname, `../auth/wa-${accountId}`);
   if (!fs.existsSync(authPath)) fs.mkdirSync(authPath, { recursive: true });
   
-  // 1. FULL RESTORE from DB
+  // 1. RESTAURATION GRANULAIRE (Scale 20K)
+  // On restaure fichier par fichier depuis la nouvelle table account_sessions
   try {
-    const { data: account } = await supabase.from('accounts').select('credentials').eq('id', accountId).single();
-    if (account?.credentials?.files) {
-      logger.info(`🔍 Restoring session for ${accountId} (${Object.keys(account.credentials.files).length} files)...`);
-      for (const [file, content] of Object.entries(account.credentials.files)) {
-        fs.writeFileSync(path.join(authPath, file), content);
+    const { data: sessionFiles } = await supabase.from('account_sessions').select('filename, data').eq('account_id', accountId);
+    if (sessionFiles && sessionFiles.length > 0) {
+      logger.info(`📂 Restauration de ${sessionFiles.length} fichiers de session pour ${accountId}`);
+      for (const file of sessionFiles) {
+        const filePath = path.join(authPath, file.filename);
+        if (!fs.existsSync(path.dirname(filePath))) fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, file.data);
       }
-      logger.info('✅ Session files restored');
     }
-  } catch (e) {
-    logger.error('Failed session restore:', e);
-  }
+  } catch (e) { logger.error('Session Restore Error:', e); }
 
   const { state, saveCreds } = await useMultiFileAuthState(authPath);
   const { version } = await fetchLatestBaileysVersion();
   
   const sock = makeWASocket({
     version,
-    printQRInTerminal: false,
     auth: state,
-    logger: logger.child({ module: 'baileys' }),
-    browser: Browsers.macOS('Desktop')
+    printQRInTerminal: false,
+    logger: logger.child({ module: 'baileys', accountId }),
+    browser: Browsers.macOS('Desktop'),
+    syncFullHistory: true, // Crucial pour 20K users
+    shouldSyncHistoryMessage: () => true,
+    patchMessageBeforeSending: (message) => {
+      const requiresPatch = !!(message.buttonsMessage || message.templateMessage || message.listMessage);
+      if (requiresPatch) {
+        message = { viewOnceMessage: { message: { messageContextInfo: { deviceListMetadata: {}, deviceListMetadataVersion: 2 }, ...message } } };
+      }
+      return message;
+    }
   });
 
-  // 2. FULL PERSIST to DB
+  // 2. PERSISTANCE HAUTE PERFORMANCE
+  // On sauve chaque fichier JSON individuellement en base
   sock.ev.on('creds.update', async () => {
     await saveCreds();
-    // Scan all files in auth folder and save to DB
-    const files = {};
-    const authFiles = fs.readdirSync(authPath);
-    for (const file of authFiles) {
-      if (file.endsWith('.json')) {
-        files[file] = fs.readFileSync(path.join(authPath, file), 'utf-8');
-      }
-    }
-    await supabase.from('accounts').update({ credentials: { files } }).eq('id', accountId);
-    logger.info(`💾 Full session (${authFiles.length} files) persisted to DB`);
+    try {
+      const files = fs.readdirSync(authPath).filter(f => f.endsWith('.json'));
+      const upserts = files.map(f => ({
+        account_id: accountId,
+        filename: f,
+        data: fs.readFileSync(path.join(authPath, f), 'utf-8')
+      }));
+      await supabase.from('account_sessions').upsert(upserts, { onConflict: 'account_id, filename' });
+    } catch (e) { logger.error('Creds Save Error:', e); }
   });
 
+  // 3. SYNCHRONISATION MASSIVE DES CONTACTS (Bulk Upsert)
+  const syncContacts = async (contacts) => {
+    if (!contacts.length) return;
+    logger.info(`👥 Syncing ${contacts.length} contacts en masse...`);
+    
+    const contactUpserts = [];
+    const identityUpserts = [];
+
+    for (const contact of contacts) {
+      const jid = jidNormalizedUser(contact.id || contact.jid);
+      if (!jid || jid.endsWith('@g.us')) continue; // Groupes à part
+      
+      const phone = jid.split('@')[0];
+      const name = contact.name || contact.verifiedName || contact.notify || phone;
+      
+      identityUpserts.push({ phone, full_name: name });
+      contactUpserts.push({
+        account_id: accountId,
+        external_id: jid,
+        display_name: name,
+        avatar_url: contact.imgUrl || null,
+        metadata: { source: 'whatsapp', platform: 'whatsapp' }
+      });
+    }
+
+    try {
+      if (identityUpserts.length) await supabase.from('identities').upsert(identityUpserts, { onConflict: 'phone' });
+      if (contactUpserts.length) await supabase.from('contacts').upsert(contactUpserts, { onConflict: 'account_id, external_id' });
+    } catch (e) { logger.error('Contact Sync Error:', e); }
+  };
+
+  sock.ev.on('contacts.set', ({ contacts }) => syncContacts(contacts));
+  sock.ev.on('contacts.upsert', (contacts) => syncContacts(contacts));
+
+  // 4. SYNCHRONISATION DES CHATS ET GROUPES
+  const syncChats = async (chats) => {
+    if (!chats.length) return;
+    logger.info(`💬 Syncing ${chats.length} conversations et groupes...`);
+    const chatUpserts = [];
+
+    for (const chat of chats) {
+      const jid = jidNormalizedUser(chat.id);
+      const isGroup = jid.endsWith('@g.us');
+      
+      chatUpserts.push({
+        account_id: accountId,
+        external_id: jid,
+        platform: 'whatsapp',
+        title: chat.name || (isGroup ? 'Groupe WhatsApp' : jid.split('@')[0]),
+        is_group: isGroup,
+        last_message_preview: chat.lastMessageRecvTimestamp ? 'Synchronisé' : null,
+        unread_count: chat.unreadCount || 0,
+        updated_at: new Date()
+      });
+    }
+
+    try {
+      if (chatUpserts.length) await supabase.from('conversations').upsert(chatUpserts, { onConflict: 'account_id, external_id' });
+    } catch (e) { logger.error('Chat Sync Error:', e); }
+  };
+
+  sock.ev.on('chats.set', ({ chats }) => syncChats(chats));
+  sock.ev.on('chats.upsert', (chats) => syncChats(chats));
+
+  // 5. GESTION DES MESSAGES ET RECONNEXION
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
     if (qr && onEvents?.onQR) onEvents.onQR(qr);
 
     if (connection === 'close') {
       const statusCode = lastDisconnect?.error?.output?.statusCode;
-      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-      if (shouldReconnect) connectToWhatsApp(accountId, onMessage, onEvents);
+      if (statusCode !== DisconnectReason.loggedOut) {
+        logger.info('🔄 Tentative de reconnexion auto...');
+        setTimeout(() => connectToWhatsApp(accountId, onMessage, onEvents), 5000);
+      } else {
+        await supabase.from('accounts').update({ status: 'disconnected' }).eq('id', accountId);
+        if (fs.existsSync(authPath)) fs.rmSync(authPath, { recursive: true, force: true });
+      }
     } else if (connection === 'open') {
-      logger.info(`✅ WhatsApp OPEN for ${accountId}`);
+      logger.info(`🚀 WhatsApp Connecté pour ${accountId}`);
       await supabase.from('accounts').update({ status: 'connected' }).eq('id', accountId);
-      if (onEvents?.onConnected) onEvents.onConnected();
+    }
+  });
+
+  sock.ev.on('messages.upsert', async ({ messages, type }) => {
+    if (type !== 'notify') return;
+    for (const msg of messages) {
+      const jid = jidNormalizedUser(msg.key.remoteJid);
+      if (!jid || jid === 'status@broadcast') continue;
+
+      const content = msg.message?.conversation || msg.message?.extendedTextMessage?.text || (msg.message?.imageMessage ? '[Image]' : '[Média]');
       
-      // Intensive profile pic sync
-      const { data: list } = await supabase.from('contacts').select('external_id').eq('account_id', accountId);
-      if (list) {
-        for (const c of list) {
-          try {
-            const url = await sock.profilePictureUrl(c.external_id, 'image');
-            if (url) await supabase.from('contacts').update({ avatar_url: url }).eq('account_id', accountId).eq('external_id', c.external_id);
-            await delay(500);
-          } catch(e) {}
-        }
-      }
-    }
-  });
-
-  // (Event listeners for messages/history/contacts remain same as previous turno but optimized)
-  sock.ev.on('messaging-history.sync', async ({ chats, contacts, messages }) => {
-    logger.info(`📥 History Sync: ${chats.length} chats, ${messages?.length || 0} messages`);
-    
-    // 1. Sync Chats & Conversations
-    for (const chat of chats) {
-      const { data: contact } = await supabase.from('contacts').upsert({
-        account_id: accountId,
-        external_id: chat.id,
-        display_name: chat.name || chat.id.split('@')[0],
-      }, { onConflict: 'account_id, external_id' }).select().single();
-
-      if (contact) {
-        await supabase.from('conversations').upsert({
-          account_id: accountId,
-          contact_id: contact.id,
-          external_id: chat.id,
-          platform: 'whatsapp',
-          title: chat.name || chat.id.split('@')[0],
-          last_message_preview: chat.lastMessageRecvTimestamp ? 'Historique synchronisé' : null,
-          updated_at: new Date()
-        }, { onConflict: 'account_id, external_id' });
-      }
-    }
-
-    // 2. Sync History Messages
-    if (messages && messages.length > 0) {
-      for (const msg of messages) {
-        const remoteJid = msg.key.remoteJid;
-        if (!remoteJid) continue;
-        const content = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '[Média]';
-        
-        // Find existing conversation
-        const { data: conv } = await supabase.from('conversations').select('id').eq('account_id', accountId).eq('external_id', remoteJid).single();
-        if (conv) {
-          await supabase.from('messages').upsert({
-            conversation_id: conv.id,
-            account_id: accountId,
-            remote_id: msg.key.id,
-            sender_id: msg.key.fromMe ? 'me' : remoteJid,
-            content,
-            is_from_me: !!msg.key.fromMe,
-            timestamp: new Date((msg.messageTimestamp || Date.now() / 1000) * 1000)
-          }, { onConflict: 'remote_id' });
-        }
-      }
-    }
-  });
-
-  sock.ev.on('chats.upsert', async (chats) => {
-    for (const chat of chats) {
-      await supabase.from('conversations').upsert({
-        account_id: accountId,
-        external_id: chat.id,
-        platform: 'whatsapp',
-        title: chat.name || chat.id.split('@')[0],
-        last_message_preview: chat.lastMessageRecvTimestamp ? 'Conversation détectée' : null,
-        updated_at: new Date()
-      }, { onConflict: 'account_id, external_id' });
-    }
-  });
-
-  sock.ev.on('contacts.upsert', async (contacts) => {
-    for (const contact of contacts) {
-      await supabase.from('contacts').upsert({
-        account_id: accountId,
-        external_id: contact.id,
-        display_name: contact.name || contact.verifiedName || contact.id.split('@')[0],
-      }, { onConflict: 'account_id, external_id' });
-    }
-  });
-
-  sock.ev.on('contacts.update', async (updates) => {
-    for (const update of updates) {
-      if (update.imgUrl !== undefined) {
-        await supabase.from('contacts').update({ avatar_url: update.imgUrl }).eq('account_id', accountId).eq('external_id', update.id);
-      }
-      if (update.name || update.verifiedName) {
-        await supabase.from('contacts').update({ display_name: update.name || update.verifiedName }).eq('account_id', accountId).eq('external_id', update.id);
-      }
-    }
-  });
-
-  sock.ev.on('messages.upsert', async (m) => {
-    for (const msg of m.messages) {
-      const remoteJid = msg.key.remoteJid;
-      if (!remoteJid) continue;
-      const content = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '[Média]';
-      
-      const { data: contact } = await supabase.from('contacts').upsert({
-        account_id: accountId,
-        external_id: remoteJid,
-        display_name: msg.pushName || remoteJid.split('@')[0]
-      }, { onConflict: 'account_id, external_id' }).select().single();
-
-      if (contact) {
+      try {
         const { data: conv } = await supabase.from('conversations').upsert({
           account_id: accountId,
-          contact_id: contact.id,
-          external_id: remoteJid,
+          external_id: jid,
           platform: 'whatsapp',
           last_message_preview: content?.slice(0, 100),
           updated_at: new Date()
-        }, { onConflict: 'account_id, external_id' }).select().single();
+        }, { onConflict: 'account_id, external_id' }).select('id').single();
 
         if (conv) {
-          await supabase.from('messages').upsert({
+          await supabase.from('messages').insert({
             conversation_id: conv.id,
             account_id: accountId,
             remote_id: msg.key.id,
-            sender_id: msg.key.fromMe ? 'me' : remoteJid,
+            sender_id: msg.key.fromMe ? 'me' : jid,
             content,
             is_from_me: !!msg.key.fromMe,
             timestamp: new Date((msg.messageTimestamp || Date.now() / 1000) * 1000)
-          }, { onConflict: 'remote_id' });
+          });
         }
-      }
-      if (onMessage && !msg.key.fromMe) onMessage('whatsapp', msg.pushName || remoteJid, content, accountId, remoteJid);
+      } catch (e) { logger.error('Message Save Error:', e); }
+      
+      if (onMessage && !msg.key.fromMe) onMessage('whatsapp', msg.pushName || jid, content, accountId, jid);
     }
   });
 
