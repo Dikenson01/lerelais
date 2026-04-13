@@ -334,13 +334,24 @@ function App() {
                     {msg.media_type === 'image' && <div className="media-placeholder"><ImageIcon size={24} /> <span>Image reçue</span></div>}
                     {msg.media_type === 'audio' && <div className="media-placeholder"><RefreshCw size={18} /> <span>Audio reçu</span></div>}
                     {msg.content}
+                {msg.media_url && (
+                  <div className="message-media">
+                    {msg.media_type === 'image' ? (
+                      <img src={msg.media_url} alt="Media" className="clickable" onClick={() => window.open(msg.media_url, '_blank')} />
+                    ) : msg.media_type === 'video' ? (
+                      <video src={msg.media_url} controls className="message-video" />
+                    ) : (
+                      <a href={msg.media_url} target="_blank" rel="noreferrer" className="file-link">📁 Voir le fichier</a>
+                    )}
+                  </div>
+                )}
                   </div>
                 ))}
                 <div ref={messagesEndRef} />
               </div>
 
               <footer className="chat-footer">
-                <form className="input-group" onSubmit={(e) => { e.preventDefault(); handleSendMessage(); }}>
+                <form className="input-group" onSubmit={sendMessage}>
                   <input type="text" placeholder="Écrire un message..." value={newMessage} onChange={(e) => setNewMessage(e.target.value)} autoFocus />
                   <button type="submit" className="send-btn" disabled={!newMessage.trim()}><Send size={18} /></button>
                 </form>

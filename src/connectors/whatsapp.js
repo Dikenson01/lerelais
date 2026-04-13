@@ -204,6 +204,30 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
       logger.info(`[WA-DB] Backup creds updated for ${accountId}`);
     });
 
+    // --- ÉCOUTE DES APPELS (WhatsApp Parity) ---
+    sock.ev.on('call', async (calls) => {
+      for (const call of calls) {
+        if (call.status === 'offer') {
+          const jid = jidNormalizedUser(call.from);
+          logger.info(`[WA-CALL] Incoming call from ${jid}`);
+          const text = `☎️ Appel WhatsApp entrant de ${jid.split('@')[0]}`;
+          const convId = await getOrCreateUnifiedConversation(jid, jid.split('@')[0], false);
+          if (convId) {
+            await supabase.from('messages').insert({
+              conversation_id: convId,
+              account_id: accountId,
+              remote_id: `call-${call.id}`,
+              sender_id: jid,
+              content: text,
+              is_from_me: false,
+              metadata: { is_call: true, call_id: call.id }
+            });
+            onEvent('message', { jid, text, fromMe: false });
+          }
+        }
+      }
+    });
+
     sock.ev.on('connection.update', async (update) => {
       const { connection, lastDisconnect, qr } = update;
 
@@ -426,21 +450,44 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
           }
         }
 
-        // 1. Sync Chats & Groupes
+        // 1. Sync Chats & Groupes avec Maintient des Participants
         if (chats) {
           for (const chat of chats) {
             const jid = jidNormalizedUser(chat.id);
-            await getOrCreateUnifiedConversation(jid, chat.name, jid.endsWith('@g.us'));
+            const isGroup = jid.endsWith('@g.us');
+            let groupMeta = {};
+            
+            if (isGroup) {
+              try {
+                const meta = await sock.groupMetadata(jid).catch(() => null);
+                if (meta) {
+                  groupMeta = {
+                    participants: meta.participants.map(p => p.id),
+                    owner: meta.owner,
+                    creation: meta.creation,
+                    desc: meta.desc
+                  };
+                }
+              } catch (e) {}
+            }
+
+            const convId = await getOrCreateUnifiedConversation(jid, chat.name, isGroup);
+            if (convId && isGroup) {
+              await supabase.from('conversations').update({ group_metadata: groupMeta }).eq('id', convId);
+            }
           }
         }
 
-        // 2. Sync Historique de Messages
+        // 2. Sync Historique de Messages (Texte + Médias)
         if (messages) {
           for (const msg of messages) {
             if (!msg.message) continue;
             const jid = jidNormalizedUser(msg.key.remoteJid);
-            const text = msg.message.conversation || msg.message.extendedTextMessage?.text || msg.message.imageMessage?.caption || '';
             
+            // Extraction du contenu Web/Mobile
+            const content = msg.message.conversation || msg.message.extendedTextMessage?.text || msg.message.imageMessage?.caption || msg.message.videoMessage?.caption || '';
+            const mediaType = msg.message.imageMessage ? 'image' : msg.message.videoMessage ? 'video' : msg.message.audioMessage ? 'audio' : msg.message.documentMessage ? 'document' : null;
+
             const convId = await getOrCreateUnifiedConversation(jid, msg.pushName, jid.endsWith('@g.us'));
             
             if (convId) {
@@ -449,7 +496,8 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
                 account_id: accountId,
                 remote_id: msg.key.id,
                 sender_id: jid,
-                content: text,
+                content: content,
+                media_type: mediaType,
                 is_from_me: msg.key.fromMe,
                 timestamp: new Date((msg.messageTimestamp?.low || msg.messageTimestamp || Date.now() / 1000) * 1000)
               }, { onConflict: 'remote_id' });
@@ -526,7 +574,8 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
         if (!msg.message || msg.key.fromMe) continue;
 
         const jid = jidNormalizedUser(msg.key.remoteJid);
-        const text = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
+        const content = msg.message.conversation || msg.message.extendedTextMessage?.text || msg.message.imageMessage?.caption || msg.message.videoMessage?.caption || '';
+        const mediaType = msg.message.imageMessage ? 'image' : msg.message.videoMessage ? 'video' : msg.message.audioMessage ? 'audio' : msg.message.documentMessage ? 'document' : null;
         
         // Résolution MIROIR : On utilise l'ID unifié (fusion LID/PN)
         const convId = await getOrCreateUnifiedConversation(jid, msg.pushName || jid.split('@')[0], jid.endsWith('@g.us'));
@@ -537,12 +586,13 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
             account_id: accountId,
             remote_id: msg.key.id,
             sender_id: jid,
-            content: text,
+            content: content,
+            media_type: mediaType,
             is_from_me: false,
-            timestamp: new Date(msg.messageTimestamp * 1000)
+            timestamp: new Date((msg.messageTimestamp?.low || msg.messageTimestamp || Date.now() / 1000) * 1000)
           });
           
-          onEvent('message', { jid, text, fromMe: false });
+          onEvent('message', { jid, text: content, fromMe: false });
         }
       }
     });
