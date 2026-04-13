@@ -270,7 +270,17 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
             }
           }
 
-          // 2. Scan PDP pour tous les contacts sans photo
+          // 2. Découverte des Groupes (Miroir Profond)
+          try {
+            const groups = await sock.groupFetchAllParticipating();
+            for (const [jid, group] of Object.entries(groups)) {
+              await getOrCreateUnifiedConversation(jid, group.subject, true);
+            }
+          } catch (e) {
+            logger.error(`[WA-GROUP-FETCH-ERR] ${e.message}`);
+          }
+
+          // 3. Scan PDP pour tous les contacts sans photo
           const { data: contacts } = await supabase.from('contacts').select('id, external_id').is('avatar_url', null);
           if (contacts) {
             for (const contact of contacts) {
@@ -468,6 +478,17 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
             display_name: update.name || update.notify || jid.split('@')[0],
             metadata: { lid: update.lid || null, pn: update.phoneNumber || null }
           }, { onConflict: 'account_id, external_id' });
+        }
+      }
+    });
+
+    sock.ev.on('groups.update', async (updates) => {
+      for (const update of updates) {
+        const jid = jidNormalizedUser(update.id);
+        logger.info(`[WA-GROUP] Group info updated: ${jid}`);
+        await getOrCreateUnifiedConversation(jid, update.subject, true);
+        if (update.participants) {
+          // Future: sync participants if needed
         }
       }
     });
