@@ -26,34 +26,34 @@ const useSupabaseAuthState = async (accountId) => {
   const TABLE = 'account_sessions';
   
   // Adaptateur de Namespace par préfixe (Garantit compatibilité sans migration DB)
-  const makeKey = (namespace, filename) => `NS:${namespace}:${filename}`;
+  const makeKey = (ns_group, filename) => `NS:${ns_group}:${filename}`;
 
-  const writeData = async (data, filename, namespace = 'active') => {
+  const writeData = async (data, filename, ns_group = 'active') => {
     try {
       const payload = {
         account_id: accountId,
-        filename: makeKey(namespace, filename),
+        filename: makeKey(ns_group, filename),
         data: JSON.stringify(data, BufferJSON.replacer),
         updated_at: new Date().toISOString()
       };
       await supabase.from(TABLE).upsert(payload, { onConflict: 'account_id, filename' });
     } catch (e) {
-      logger.error(`[WA-DB] Write error (${namespace}:${filename}):`, e.message);
+      logger.error(`[WA-DB] Write error (${ns_group}:${filename}):`, e.message);
     }
   };
 
-  const readData = async (filename, namespace = 'active') => {
+  const readData = async (filename, ns_group = 'active') => {
     try {
       const { data, error } = await supabase
         .from(TABLE)
         .select('data')
         .eq('account_id', accountId)
-        .eq('filename', makeKey(namespace, filename))
+        .eq('filename', makeKey(ns_group, filename))
         .maybeSingle();
 
       if (error || !data) {
         // TENTATIVE DE RESTAURATION DEPUIS LE BACKUP
-        if (namespace === 'active') {
+        if (ns_group === 'active') {
           const backup = await readData(filename, 'backup');
           if (backup) {
              logger.info(`[WA-RECOVERY] Restored ${filename} from backup!`);
@@ -69,8 +69,8 @@ const useSupabaseAuthState = async (accountId) => {
     }
   };
 
-  const removeData = async (filename, namespace = 'active') => {
-    await supabase.from(TABLE).delete().eq('account_id', accountId).eq('filename', makeKey(namespace, filename));
+  const removeData = async (filename, ns_group = 'active') => {
+    await supabase.from(TABLE).delete().eq('account_id', accountId).eq('filename', makeKey(ns_group, filename));
   };
 
   const clearSession = async () => {
