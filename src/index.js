@@ -181,44 +181,50 @@ app.get('/api/messages/:convId', async (req, res) => {
 app.post('/api/messages', async (req, res) => {
   const { conversationId, content } = req.body;
   try {
-    const { data: conv, error: convError } = await supabase.from('conversations').select('*').eq('id', conversationId).single();
-    if (!conv || convError) return res.status(404).json({ error: 'Conversation not found' });
+    const { data: conv, error: convError } = await supabase.from('conversations').select('*').eq('id', conversationId).maybeSingle();
+    
+    if (!conv) {
+      return res.status(404).json({ error: 'Conversation introuvable (elle a peut-être été fusionnée). Veuillez rafraîchir.' });
+    }
 
     const sock = activeConnectors[conv.account_id];
-    let remoteId = `temp-${crypto.randomUUID()}`; // Default temp ID
+    let remoteId = `temp-${crypto.randomUUID()}`; 
     
     if (sock) {
       try {
-        if (conv.platform === 'whatsapp') {
-          const sent = await sock.sendMessage(conv.external_id, content);
-          remoteId = sent.messageId || remoteId;
+        const sent = await sock.sendMessage(conv.external_id, content);
+        if (sent.success) {
+          remoteId = sent.messageId;
         } else {
-          const sent = await sock.sendMessage(conv.external_id, content);
-          remoteId = sent.id || sent.pk || remoteId;
+          throw new Error(sent.error || 'Erreur d\'envoi');
         }
       } catch (sendErr) {
-        logger.error(`Failed to send via ${conv.platform}:`, sendErr.message);
-        return res.status(503).json({ error: `Could not send: ${sendErr.message}` });
+        logger.error(`[WA-SEND-ERR] ${conv.external_id}:`, sendErr.message);
+        return res.status(503).json({ error: `Échec de l'envoi: ${sendErr.message}` });
       }
-    } else {
-      logger.warn(`Connector missing for account ${conv.account_id}. Message saved locally only.`);
     }
 
-    const { data: msg, error: insertError } = await supabase.from('messages').upsert({
+    const { data: msg, error: insertError } = await supabase.from('messages').insert({
       conversation_id: conversationId,
       account_id: conv.account_id,
       remote_id: remoteId,
       content,
       is_from_me: true,
       timestamp: new Date()
-    }, { onConflict: 'remote_id' }).select().single();
+    }).select().single();
 
     if (insertError) throw insertError;
 
-    await supabase.from('conversations').update({ last_message_preview: content, last_message_at: new Date() }).eq('id', conversationId);
+    // Mise à jour MIROIR : On remonte la discussion
+    await supabase.from('conversations').update({ 
+      last_message_preview: content, 
+      last_message_at: new Date() 
+    }).eq('id', conversationId);
+
     res.json(msg);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    logger.error(`[API-ERR] POST /api/messages: ${err.message}`);
+    res.status(500).json({ error: 'Erreur interne lors de l\'envoi' });
   }
 });
 

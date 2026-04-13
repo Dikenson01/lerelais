@@ -353,26 +353,38 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
       return data?.id;
     };
 
-    // --- RESOLUTION UNIFIÉE (Miroir) ---
+    // --- RESOLUTION UNIFIÉE RADICALE (Miroir V3) ---
     const getOrCreateUnifiedConversation = async (jid, title, isGroup = false) => {
-      const contact_id = await getContactId(jid);
+      // 1. Déterminer l'ID du contact
+      let contact_id = await getContactId(jid);
       
-      // 1. Tenter de trouver une conversation existante liée à ce contact
+      // 2. Tenter de trouver une conversation existante liée à ce CONTACT (Priorité absolue)
       if (contact_id) {
         const { data: existing } = await supabase.from('conversations')
-          .select('id')
+          .select('id, external_id')
           .eq('account_id', accountId)
           .eq('contact_id', contact_id)
           .maybeSingle();
         
         if (existing) {
-          // Mettre à jour le JID (pour utiliser le plus récent pour l'envoi)
-          await supabase.from('conversations').update({ external_id: jid, title: title }).eq('id', existing.id);
+          // Si le JID technique a changé (PN -> LID), on met à jour pour pouvoir répondre
+          if (existing.external_id !== jid) {
+            await supabase.from('conversations').update({ external_id: jid, title: title || existing.title }).eq('id', existing.id);
+          }
           return existing.id;
         }
       }
 
-      // 2. Sinon, upsert par external_id (Standard Baileys)
+      // 3. Sinon, on cherche par le JID exact (pour les groupes ou contacts inconnus)
+      const { data: byJid } = await supabase.from('conversations')
+        .select('id')
+        .eq('account_id', accountId)
+        .eq('external_id', jid)
+        .maybeSingle();
+      
+      if (byJid) return byJid.id;
+
+      // 4. Création si vraiment nouveau
       const { data: conv, error } = await supabase.from('conversations').upsert({
         account_id: accountId,
         external_id: jid,
@@ -389,9 +401,9 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
 
     sock.ev.on('messaging-history.sync', async ({ chats, contacts: syncContacts, messages }) => {
       try {
-        logger.info(`[WA] Mirror Sync Started: ${chats?.length || 0} chats, ${syncContacts?.length || 0} contacts`);
+        logger.info(`[WA] Mirror V3 Sync Started: ${chats?.length || 0} chats, ${messages?.length || 0} messages`);
 
-        // 0. Sync Contacts PROFOND
+        // 0. Sync Contacts PROFOND (Mapping LID ↔ PN direct)
         if (syncContacts) {
           for (const contact of syncContacts) {
             const jid = jidNormalizedUser(contact.id);
@@ -405,7 +417,7 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
           }
         }
 
-        // 1. Sync Chats (Incluant Groupes)
+        // 1. Sync Chats & Groupes
         if (chats) {
           for (const chat of chats) {
             const jid = jidNormalizedUser(chat.id);
@@ -413,12 +425,12 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
           }
         }
 
-        // 2. Sync Messages (Historique Complet)
+        // 2. Sync Historique de Messages
         if (messages) {
           for (const msg of messages) {
             if (!msg.message) continue;
             const jid = jidNormalizedUser(msg.key.remoteJid);
-            const text = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
+            const text = msg.message.conversation || msg.message.extendedTextMessage?.text || msg.message.imageMessage?.caption || '';
             
             const convId = await getOrCreateUnifiedConversation(jid, msg.pushName, jid.endsWith('@g.us'));
             
@@ -430,19 +442,14 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
                 sender_id: jid,
                 content: text,
                 is_from_me: msg.key.fromMe,
-                timestamp: new Date(msg.messageTimestamp * 1000)
+                timestamp: new Date((msg.messageTimestamp?.low || msg.messageTimestamp || Date.now() / 1000) * 1000)
               }, { onConflict: 'remote_id' });
-              
-              await supabase.from('conversations').update({ 
-                last_message_at: new Date(msg.messageTimestamp * 1000),
-                last_message_preview: text.substring(0, 100)
-              }).eq('id', convId);
             }
           }
         }
-        logger.info(`[WA] Mirror Sync Completed.`);
+        logger.info(`[WA] Mirror V3 Sync Completed.`);
       } catch (e) {
-        logger.error(`[WA-SYNC-ERR] mirror.sync: ${e.message}`);
+        logger.error(`[WA-SYNC-ERR] mirror.v3: ${e.message}`);
       }
     });
 

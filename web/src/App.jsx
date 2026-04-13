@@ -98,27 +98,34 @@ function App() {
     }
   };
 
-  const handleSendMessage = async () => {
-    const text = newMessage.trim();
-    if (!text || !selectedConv) return;
-    setNewMessage(''); // Instant reset for UX
+  const sendMessage = async (e) => {
+    e.preventDefault();
+    if (!newMessage.trim() || !selectedConv) return;
+
+    const content = newMessage;
+    setNewMessage('');
+
     try {
       await axios.post(`${API_BASE}/messages`, {
         conversationId: selectedConv.id,
-        content: text,
-        accountId: selectedConv.account_id
+        content
       });
       fetchMessages(selectedConv.id);
+      preloadData(); // MIROIR : Rafraîchir pour voir la fusion/le tri
     } catch (err) {
       console.error('Send failed:', err);
-      if (err.response?.status === 503) {
+      if (err.response?.status === 404) {
+        alert("Cette conversation a été fusionnée pour éviter les doublons. Le Hub va se rafraîchir.");
+        preloadData();
+        setSelectedConv(null);
+      } else if (err.response?.status === 503) {
         alert('Session déconnectée. Veuillez scanner à nouveau le QR Code.');
         setShowAddModal(true);
         startWhatsAppPairing();
       } else {
         alert(err.response?.data?.error || 'Erreur lors de l\'envoi. Vérifiez que votre compte WhatsApp est bien connecté.');
       }
-      setNewMessage(text); // Restore on failure
+      setNewMessage(content); // Restore on failure
     }
   };
 
