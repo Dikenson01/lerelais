@@ -171,7 +171,10 @@ function App() {
     c.phone_number?.includes(searchQuery)
   );
 
-  const getDisplayName = (conv) => conv.contacts?.display_name || conv.title || conv.external_id?.split('@')[0] || 'Inconnu';
+  const getDisplayName = (conv) => {
+    const contact = Array.isArray(conv.contacts) ? conv.contacts[0] : conv.contacts;
+    return contact?.display_name || conv.title || conv.external_id?.split('@')[0] || 'Inconnu';
+  };
 
   if (loading) {
     return (
@@ -213,7 +216,10 @@ function App() {
           {view === 'inbox' && filteredConvs.map(conv => (
             <motion.div key={conv.id} className={`conv-card ${selectedConv?.id === conv.id ? 'active' : ''}`} onClick={() => setSelectedConv(conv)}>
               <div className="avatar-wrap">
-                {conv.contacts?.avatar_url ? <img src={conv.contacts.avatar_url} alt="" /> : <span>{getDisplayName(conv).charAt(0)}</span>}
+                {(() => {
+                  const contact = Array.isArray(conv.contacts) ? conv.contacts[0] : conv.contacts;
+                  return contact?.avatar_url ? <img src={contact.avatar_url} alt="" /> : <span>{getDisplayName(conv).charAt(0)}</span>;
+                })()}
                 <div className={`platform-dot ${conv.platform}`}></div>
               </div>
               <div className="conv-content">
@@ -258,8 +264,14 @@ function App() {
               <header className="chat-header">
                 {isMobile && <button onClick={() => setSelectedConv(null)} className="back-btn"><ArrowLeft size={20} /></button>}
                 {/* 6. PHOTO CLIQUABLE */}
-                <div className="avatar-wrap small clickable" onClick={() => selectedConv.contacts?.avatar_url && setPreviewImage(selectedConv.contacts.avatar_url)}>
-                  {selectedConv.contacts?.avatar_url ? <img src={selectedConv.contacts.avatar_url} alt="" /> : <span>{getDisplayName(selectedConv).charAt(0)}</span>}
+                <div className="avatar-wrap small clickable" onClick={() => {
+                  const contact = Array.isArray(selectedConv.contacts) ? selectedConv.contacts[0] : selectedConv.contacts;
+                  if (contact?.avatar_url) setPreviewImage(contact.avatar_url);
+                }}>
+                  {(() => {
+                    const contact = Array.isArray(selectedConv.contacts) ? selectedConv.contacts[0] : selectedConv.contacts;
+                    return contact?.avatar_url ? <img src={contact.avatar_url} alt="" /> : <span>{getDisplayName(selectedConv).charAt(0)}</span>;
+                  })()}
                 </div>
                 <div className="header-info">
                   <h2>{getDisplayName(selectedConv)}</h2>

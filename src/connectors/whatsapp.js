@@ -287,17 +287,33 @@ export async function connectToWhatsApp(accountId, onMessage, onEvents) {
         : '[Média]');
 
       try {
-        // Détection du type de média
         const mediaTag = msg.message?.imageMessage ? 'image' 
                         : msg.message?.audioMessage ? 'audio' 
                         : msg.message?.videoMessage ? 'video' 
                         : msg.message?.documentMessage ? 'document' : null;
 
-        // Trouver/créer la conversation (utilisant external_id comme clé)
+        // Trouver/créer le contact pour garantir l'avatar et le nom
+        let contactId = null;
+        if (!jid.endsWith('@g.us')) {
+          const phone = jid.split('@')[0];
+          try {
+            const { data: ct } = await supabase.from('contacts').upsert({
+              account_id: accountId,
+              external_id: jid,
+              display_name: msg.pushName || phone,
+              phone_number: phone,
+              metadata: { platform: 'whatsapp' }
+            }, { onConflict: 'account_id, external_id' }).select('id').single();
+            if (ct) contactId = ct.id;
+          } catch (_) {}
+        }
+
+        // Upsert conversation avec contact_id
         const { data: conv } = await supabase.from('conversations').upsert({
           account_id: accountId,
           external_id: jid,
           platform: 'whatsapp',
+          contact_id: contactId,
           title: msg.pushName || jid.split('@')[0],
           last_message_preview: content?.slice(0, 100),
           last_message_at: new Date()
