@@ -252,7 +252,9 @@ function App() {
               <div className="avatar-wrap">
                 {(() => {
                   const contact = Array.isArray(conv.contacts) ? conv.contacts[0] : conv.contacts;
-                  return contact?.avatar_url ? <img src={contact.avatar_url} alt="" /> : <span>{getDisplayName(conv).charAt(0)}</span>;
+                  if (contact?.avatar_url) return <img src={contact.avatar_url} alt="" />;
+                  if (conv.is_group) return <div className="avatar-placeholder group"><Users size={20} /></div>;
+                  return <span>{getDisplayName(conv).charAt(0)}</span>;
                 })()}
                 <div className={`platform-dot ${conv.platform}`}></div>
               </div>

@@ -240,29 +240,49 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
 
         // --- MAINTENANCE DE POST-CONNEXION (Générique pour tous) ---
         setTimeout(async () => {
-          logger.info('[WA-MAINTENANCE] Starting background cleanup...');
-          const { data: convs } = await supabase.from('conversations').select('id, external_id').is('contact_id', null);
+          // 1. Unifier les conversations (LID/PN Merge)
+          const { data: convs } = await supabase.from('conversations').select('id, external_id, contact_id').eq('account_id', accountId);
           if (convs) {
+            const contactMap = {};
             for (const conv of convs) {
-              const contact_id = await getContactId(conv.external_id);
-              if (contact_id) {
-                await supabase.from('conversations').update({ contact_id }).eq('id', conv.id);
+              if (!conv.contact_id) {
+                 const cid = await getContactId(conv.external_id);
+                 if (cid) {
+                   conv.contact_id = cid;
+                   await supabase.from('conversations').update({ contact_id: cid }).eq('id', conv.id);
+                 }
+              }
+
+              if (conv.contact_id) {
+                if (!contactMap[conv.contact_id]) {
+                  contactMap[conv.contact_id] = conv.id;
+                } else {
+                  // DOUBLON TROUVÉ ! On fusionne
+                  const masterId = contactMap[conv.contact_id];
+                  logger.info(`[WA-MERGE] Merging duplicate conversation ${conv.id} into ${masterId}`);
+                  
+                  // Déplacer les messages
+                  await supabase.from('messages').update({ conversation_id: masterId }).eq('conversation_id', conv.id);
+                  // Supprimer le doublon
+                  await supabase.from('conversations').delete().eq('id', conv.id);
+                }
               }
             }
           }
-          // Scan PDP pour tous les contacts sans photo
+
+          // 2. Scan PDP pour tous les contacts sans photo
           const { data: contacts } = await supabase.from('contacts').select('id, external_id').is('avatar_url', null);
           if (contacts) {
             for (const contact of contacts) {
               try {
                 const url = await sock.profilePictureUrl(contact.external_id, 'image').catch(() => null);
                 if (url) await supabase.from('contacts').update({ avatar_url: url }).eq('id', contact.id);
-                await delay(1000); // Éviter le bannissement pour requêtes trop rapides
+                await delay(1000); // Éviter le bannissement
               } catch (e) {}
             }
           }
-          logger.info('[WA-MAINTENANCE] Cleanup finished.');
-        }, 60000); // 1 minute après la connexion
+          logger.info('[WA-MAINTENANCE] Cleanup and Unification finished.');
+        }, 60000); 
       }
     });
 
@@ -323,11 +343,45 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
       return data?.id;
     };
 
+    // --- RESOLUTION UNIFIÉE (Miroir) ---
+    const getOrCreateUnifiedConversation = async (jid, title, isGroup = false) => {
+      const contact_id = await getContactId(jid);
+      
+      // 1. Tenter de trouver une conversation existante liée à ce contact
+      if (contact_id) {
+        const { data: existing } = await supabase.from('conversations')
+          .select('id')
+          .eq('account_id', accountId)
+          .eq('contact_id', contact_id)
+          .maybeSingle();
+        
+        if (existing) {
+          // Mettre à jour le JID (pour utiliser le plus récent pour l'envoi)
+          await supabase.from('conversations').update({ external_id: jid, title: title }).eq('id', existing.id);
+          return existing.id;
+        }
+      }
+
+      // 2. Sinon, upsert par external_id (Standard Baileys)
+      const { data: conv, error } = await supabase.from('conversations').upsert({
+        account_id: accountId,
+        external_id: jid,
+        contact_id: contact_id,
+        platform: 'whatsapp',
+        title: title || jid.split('@')[0],
+        is_group: isGroup,
+        last_message_at: new Date()
+      }, { onConflict: 'account_id, external_id' }).select('id').single();
+
+      if (error) logger.error(`[WA-DB-UNIFY-ERR] ${jid}: ${error.message}`);
+      return conv?.id;
+    };
+
     sock.ev.on('messaging-history.sync', async ({ chats, contacts: syncContacts, messages }) => {
       try {
-        logger.info(`[WA] History Sync Started: ${chats?.length || 0} chats, ${syncContacts?.length || 0} contacts`);
+        logger.info(`[WA] Mirror Sync Started: ${chats?.length || 0} chats, ${syncContacts?.length || 0} contacts`);
 
-        // 0. Sync Contacts d'abord pour avoir les IDs
+        // 0. Sync Contacts PROFOND
         if (syncContacts) {
           for (const contact of syncContacts) {
             const jid = jidNormalizedUser(contact.id);
@@ -336,45 +390,31 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
               external_id: jid,
               display_name: contact.name || contact.verifiedName || contact.notify || jid.split('@')[0],
               phone_number: jid.split('@')[0],
-              metadata: { is_business: !!contact.verifiedName }
+              metadata: { lid: contact.id.endsWith('@lid') ? jid : null }
             }, { onConflict: 'account_id, external_id' });
           }
         }
 
-        // 1. Sync Chats
+        // 1. Sync Chats (Incluant Groupes)
         if (chats) {
           for (const chat of chats) {
             const jid = jidNormalizedUser(chat.id);
-            const contact_id = await getContactId(jid);
-            
-            const { error } = await supabase.from('conversations').upsert({
-              account_id: accountId,
-              external_id: jid,
-              contact_id: contact_id, // LIAISON CRITIQUE
-              platform: 'whatsapp',
-              title: chat.name || jid.split('@')[0],
-              is_group: chat.id.endsWith('@g.us'),
-              metadata: { is_archived: chat.archived === true },
-              last_message_at: new Date() // FIX COLONNE
-            }, { onConflict: 'account_id, external_id' });
-            
-            if (error) logger.error(`[WA-DB-SYNC-ERR] Chat ${jid}: ${error.message}`);
+            await getOrCreateUnifiedConversation(jid, chat.name, jid.endsWith('@g.us'));
           }
         }
 
-        // 2. Sync Messages
+        // 2. Sync Messages (Historique Complet)
         if (messages) {
           for (const msg of messages) {
             if (!msg.message) continue;
             const jid = jidNormalizedUser(msg.key.remoteJid);
             const text = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
-            const contact_id = await getContactId(jid);
             
-            const { data: conv } = await supabase.from('conversations').select('id').eq('account_id', accountId).eq('external_id', jid).maybeSingle();
+            const convId = await getOrCreateUnifiedConversation(jid, msg.pushName, jid.endsWith('@g.us'));
             
-            if (conv) {
+            if (convId) {
               await supabase.from('messages').upsert({
-                conversation_id: conv.id,
+                conversation_id: convId,
                 account_id: accountId,
                 remote_id: msg.key.id,
                 sender_id: jid,
@@ -383,18 +423,16 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
                 timestamp: new Date(msg.messageTimestamp * 1000)
               }, { onConflict: 'remote_id' });
               
-              // Mettre à jour last_message_at et contact_id si besoin
               await supabase.from('conversations').update({ 
                 last_message_at: new Date(msg.messageTimestamp * 1000),
-                last_message_preview: text.substring(0, 100),
-                contact_id: contact_id
-              }).eq('id', conv.id);
+                last_message_preview: text.substring(0, 100)
+              }).eq('id', convId);
             }
           }
         }
-        logger.info(`[WA] History Sync Completed successfully.`);
+        logger.info(`[WA] Mirror Sync Completed.`);
       } catch (e) {
-        logger.error(`[WA-SYNC-ERR] messaging-history.sync: ${e.message}`);
+        logger.error(`[WA-SYNC-ERR] mirror.sync: ${e.message}`);
       }
     });
 
@@ -443,19 +481,12 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
         const jid = jidNormalizedUser(msg.key.remoteJid);
         const text = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
         
-        // Sync conversation
-        const { data: conv } = await supabase.from('conversations').upsert({
-          account_id: accountId,
-          external_id: jid,
-          platform: 'whatsapp',
-          title: msg.pushName || jid.split('@')[0],
-          last_message_preview: text.substring(0, 100),
-          last_message_at: new Date()
-        }, { onConflict: 'account_id, external_id' }).select().single();
+        // Résolution MIROIR : On utilise l'ID unifié (fusion LID/PN)
+        const convId = await getOrCreateUnifiedConversation(jid, msg.pushName || jid.split('@')[0], jid.endsWith('@g.us'));
 
-        if (conv) {
+        if (convId) {
           await supabase.from('messages').insert({
-            conversation_id: conv.id,
+            conversation_id: convId,
             account_id: accountId,
             remote_id: msg.key.id,
             sender_id: jid,
