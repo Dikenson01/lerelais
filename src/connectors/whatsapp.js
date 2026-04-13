@@ -269,7 +269,9 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
       } catch (e) {
         logger.error(`[WA-SYNC-ERR] chats.update: ${e.message}`);
       }
-      // --- HELPERS POUR LA SYNCHRO ---
+    });
+
+    // --- HELPERS POUR LA SYNCHRO ---
     const getContactId = async (jid) => {
       const { data } = await supabase.from('contacts').select('id, avatar_url').eq('external_id', jid).maybeSingle();
       if (data && !data.avatar_url) {
@@ -395,7 +397,7 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
           platform: 'whatsapp',
           title: msg.pushName || jid.split('@')[0],
           last_message_preview: text.substring(0, 100),
-          updated_at: new Date()
+          last_message_at: new Date()
         }, { onConflict: 'account_id, external_id' }).select().single();
 
         if (conv) {
