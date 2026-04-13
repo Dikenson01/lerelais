@@ -133,7 +133,6 @@ export async function connectToWhatsApp(accountId, onMessage, onEvents) {
         }
       }
     }
-    }
   });
 
   sock.ev.on('chats.upsert', async (chats) => {
