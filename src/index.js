@@ -64,11 +64,12 @@ app.get('/api/messages/:convId', async (req, res) => {
 app.post('/api/messages', async (req, res) => {
   const { conversationId, content } = req.body;
   try {
-    const { data: conv } = await supabase.from('conversations').select('*').eq('id', conversationId).single();
-    if (!conv) return res.status(404).json({ error: 'Conversation not found' });
+    const { data: conv, error: convError } = await supabase.from('conversations').select('*').eq('id', conversationId).single();
+    if (!conv || convError) return res.status(404).json({ error: 'Conversation not found' });
 
     const sock = activeConnectors[conv.account_id];
-    let remoteId = null;
+    let remoteId = `temp-${crypto.randomUUID()}`; // Default temp ID
+    
     if (sock) {
       try {
         if (conv.platform === 'whatsapp') {
@@ -76,18 +77,20 @@ app.post('/api/messages', async (req, res) => {
           remoteId = sent.key.id;
         } else {
           const sent = await sock.sendMessage(conv.external_id, content);
-          remoteId = sent.id || sent.pk;
+          remoteId = sent.id || sent.pk || remoteId;
         }
       } catch (sendErr) {
         logger.error(`Failed to send via ${conv.platform}:`, sendErr.message);
-        return res.status(503).json({ error: 'Account disconnected or platform error' });
+        return res.status(503).json({ error: `Could not send: ${sendErr.message}` });
       }
+    } else {
+      logger.warn(`Connector missing for account ${conv.account_id}. Message saved locally only.`);
     }
 
     const { data: msg, error: insertError } = await supabase.from('messages').upsert({
       conversation_id: conversationId,
       account_id: conv.account_id,
-      remote_id: remoteId, // Use the real ID from platform
+      remote_id: remoteId,
       content,
       is_from_me: true,
       timestamp: new Date()
@@ -227,26 +230,33 @@ async function restoreConnectors() {
 }
 
 async function start() {
-  await restoreConnectors();
   if (process.env.RAILWAY_STATIC_URL) process.env.WEBAPP_URL = `https://${process.env.RAILWAY_STATIC_URL}`;
   
+  // 1. Start HTTP Server First
   app.listen(PORT, '0.0.0.0', () => {
     logger.info(`🚀 Server running on port ${PORT}`);
   });
 
+  // 2. Setup Bot but don't block
   await setupMenuButton();
+  
+  // 3. Initialize Connectors
+  setTimeout(async () => {
+    try {
+      await restoreConnectors();
+    } catch (e) {
+      logger.error('Restore Error:', e.message);
+    }
+  }, 1000);
+
+  // 4. Launch Bot (Silent fail if conflict)
   try {
-    await bot.telegram.deleteWebhook({ drop_pending_updates: true });
-    bot.launch().catch(err => {
+    bot.launch({ dropPendingUpdates: true }).catch(err => {
       if (err.response?.error_code === 409) {
-        logger.warn('Telegram Conflict (409) - Another instance is running. This is normal during deployment.');
-      } else {
-        throw err;
+        logger.warn('Telegram Conflict (409) - Another instance is running.');
       }
     });
-  } catch (e) {
-    logger.error('Telegraf Launch Error:', e.message);
-  }
+  } catch (e) {}
 }
 
 start();
