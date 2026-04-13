@@ -25,10 +25,94 @@ app.use(express.json());
 // State
 const activeConnectors = {};
 const relayMap = new Map();
+const pairingCodes = new Map(); // Numéro -> Code
 
 // --- API ROUTES ---
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok', time: new Date() }));
+
+// --- WHATSAPP CONNECTION FACILITATORS ---
+
+app.get('/whatsapp-qr', (req, res) => {
+  const qrPath = path.resolve(__dirname, '../web/dist/whatsapp_qr.png');
+  res.send(`
+    <html>
+      <head><title>WhatsApp QR</title><meta http-equiv="refresh" content="5"></head>
+      <body style="background: #111; color: white; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; font-family: sans-serif;">
+        <h2>Scanner pour connecter LeRelais Hub</h2>
+        <img src="/whatsapp_qr.png" style="border: 10px solid white; border-radius: 10px; width: 300px; background: white;" />
+        <p>Actualisation automatique toutes les 5s</p>
+      </body>
+    </html>
+  `);
+});
+
+app.get('/wa-pairing-code', async (req, res) => {
+  const phone = req.query.phone;
+  if (!phone) {
+    return res.send(`
+      <body style="background: #111; color: white; padding: 50px; font-family: sans-serif;">
+        <h2>Jumelage par Code</h2>
+        <form action="/wa-pairing-code" method="GET">
+          Saisissez votre numéro (format international, ex: 33712345678) :<br><br>
+          <input type="text" name="phone" placeholder="337..." style="padding: 10px; width: 300px;">
+          <button type="submit" style="padding: 10px;">Générer le code</button>
+        </form>
+      </body>
+    `);
+  }
+
+  const cleanPhone = phone.replace(/\D/g, '');
+  
+  // Si on n'a pas encore de code pour ce numéro, on lance la demande
+  if (!pairingCodes.has(cleanPhone)) {
+    pairingCodes.set(cleanPhone, "EN ATTENTE...");
+    const accountId = crypto.randomUUID();
+    await supabase.from('accounts').insert({ id: accountId, platform: 'whatsapp', status: 'pairing' });
+    
+    await connectToWhatsApp(accountId, (p, f, c, aid, eid) => relayToTelegram(p, f, c, aid, eid), {
+      onPairingCode: (code) => pairingCodes.set(cleanPhone, code),
+      onConnected: () => {
+        pairingCodes.delete(cleanPhone);
+        logger.info(`✅ Account ${accountId} connected via code`);
+      }
+    }, cleanPhone);
+  }
+
+  const code = pairingCodes.get(cleanPhone);
+  res.send(`
+    <body style="background: #111; color: white; padding: 50px; font-family: sans-serif; text-align: center;">
+      <h2>Code de jumelage pour +${cleanPhone}</h2>
+      <div style="font-size: 48px; font-weight: bold; background: #222; padding: 20px; border-radius: 10px; margin: 20px auto; border: 2px solid #555; width: fit-content; color: #00ff00; letter-spacing: 5px;">
+        ${code}
+      </div>
+      <p>Entrez ce code sur votre téléphone dans <b>Appareils connectés > Associer avec un numéro de téléphone</b>.</p>
+      <script>setTimeout(() => window.location.reload(), 3000);</script>
+    </body>
+  `);
+});
+
+app.get('/wa-restart', async (req, res) => {
+  logger.info('⚠️ WA RESTART initiated...');
+  try {
+    // 1. Déconnecter les actifs
+    for (const key in activeConnectors) {
+      if (activeConnectors[key].end) activeConnectors[key].end();
+      delete activeConnectors[key];
+    }
+    // 2. Vider les dossiers auth
+    const authDir = path.resolve(__dirname, '../auth');
+    if (fs.existsSync(authDir)) fs.rmSync(authDir, { recursive: true, force: true });
+    fs.mkdirSync(authDir);
+    // 3. Vider la DB session
+    await supabase.from('account_sessions').delete().neq('account_id', '00000000-0000-0000-0000-000000000000');
+    await supabase.from('accounts').update({ status: 'disconnected' }).eq('platform', 'whatsapp');
+    
+    res.send('✅ Session WhatsApp réinitialisée. Vous pouvez maintenant utiliser /whatsapp-qr ou /wa-pairing-code.');
+  } catch (e) {
+    res.status(500).send('Erreur: ' + e.message);
+  }
+});
 
 app.get('/api/accounts', async (req, res) => {
   const { data, error } = await supabase.from('accounts').select('*');

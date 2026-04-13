@@ -1,10 +1,11 @@
 import makeWASocket, {
   DisconnectReason,
-  useMultiFileAuthState,
+  initAuthState,
   fetchLatestBaileysVersion,
   Browsers,
   delay,
-  jidNormalizedUser
+  jidNormalizedUser,
+  BufferJSON
 } from '@whiskeysockets/baileys';
 import logger from '../utils/logger.js';
 import supabase from '../config/supabase.js';
@@ -15,27 +16,65 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-export async function connectToWhatsApp(accountId, onMessage, onEvents) {
-  const authPath = path.join(__dirname, `../../auth/wa-${accountId}`);
-  if (!fs.existsSync(authPath)) fs.mkdirSync(authPath, { recursive: true });
+// --- CUSTOM SUPABASE AUTH STATE ---
+async function useSupabaseAuthState(accountId) {
+  const readData = async (filename) => {
+    try {
+      const { data } = await supabase.from('account_sessions').select('data').eq('account_id', accountId).eq('filename', filename).single();
+      return data ? JSON.parse(data.data, BufferJSON.reviver) : null;
+    } catch (_) { return null; }
+  };
 
-  // 1. RESTAURATION GRANULAIRE depuis account_sessions
-  try {
-    const { data: sessionFiles } = await supabase
-      .from('account_sessions')
-      .select('filename, data')
-      .eq('account_id', accountId);
-    if (sessionFiles && sessionFiles.length > 0) {
-      logger.info(`📂 Restauration de ${sessionFiles.length} fichiers de session pour ${accountId}`);
-      for (const file of sessionFiles) {
-        const filePath = path.join(authPath, file.filename);
-        if (!fs.existsSync(path.dirname(filePath))) fs.mkdirSync(path.dirname(filePath), { recursive: true });
-        fs.writeFileSync(filePath, file.data);
+  const writeData = async (data, filename) => {
+    const jsonStr = JSON.stringify(data, BufferJSON.replacer);
+    if (!jsonStr || jsonStr === '{}') return;
+    await supabase.from('account_sessions').upsert({
+      account_id: accountId,
+      filename,
+      data: jsonStr
+    }, { onConflict: 'account_id, filename' });
+  };
+
+  const removeData = async (filename) => {
+    await supabase.from('account_sessions').delete().eq('account_id', accountId).eq('filename', filename);
+  };
+
+  const creds = await readData('creds.json') || initAuthState().creds;
+
+  return {
+    state: {
+      creds,
+      keys: {
+        get: async (type, ids) => {
+          const data = {};
+          await Promise.all(ids.map(async id => {
+            const filename = `${type}-${id}.json`;
+            const val = await readData(filename);
+            if (val) data[id] = val;
+          }));
+          return data;
+        },
+        set: async (data) => {
+          const tasks = [];
+          for (const category in data) {
+            for (const id in data[category]) {
+              const filename = `${category}-${id}.json`;
+              const value = data[category][id];
+              tasks.push(value ? writeData(value, filename) : removeData(filename));
+            }
+          }
+          await Promise.all(tasks);
+        }
       }
-    }
-  } catch (e) { logger.error('Session Restore Error:', e.message); }
+    },
+    saveCreds: () => writeData(creds, 'creds.json')
+  };
+}
 
-  const { state, saveCreds } = await useMultiFileAuthState(authPath);
+export async function connectToWhatsApp(accountId, onMessage, onEvents, pairingPhone = null) {
+  logger.info(`🌐 Initializing Immortal Connection for ${accountId}...`);
+  
+  const { state, saveCreds } = await useSupabaseAuthState(accountId);
   const { version } = await fetchLatestBaileysVersion();
 
   const sock = makeWASocket({
@@ -44,37 +83,24 @@ export async function connectToWhatsApp(accountId, onMessage, onEvents) {
     printQRInTerminal: false,
     logger: logger.child({ module: 'baileys', accountId }),
     browser: Browsers.ubuntu('Chrome'),
-    syncFullHistory: true,
-    shouldSyncHistoryMessage: () => true,
+    syncFullHistory: false,
+    shouldSyncHistoryMessage: () => false,
     getMessage: async () => undefined,
-    patchMessageBeforeSending: (message) => {
-      const requiresPatch = !!(message.buttonsMessage || message.templateMessage || message.listMessage);
-      if (requiresPatch) {
-        message = { viewOnceMessage: { message: { messageContextInfo: { deviceListMetadata: {}, deviceListMetadataVersion: 2 }, ...message } } };
-      }
-      return message;
-    }
   });
 
-  // 2. PERSISTANCE — sauve les creds en DB pour restore
-  sock.ev.on('creds.update', async () => {
-    await saveCreds();
-    try {
-      const upserts = files.map(f => {
-        const content = fs.readFileSync(path.join(authPath, f), 'utf-8');
-        if (!content || content.length < 2) return null; // Safety check
-        return {
-          account_id: accountId,
-          filename: f,
-          data: content
-        };
-      }).filter(Boolean);
-      
-      if (upserts.length > 0) {
-        await supabase.from('account_sessions').upsert(upserts, { onConflict: 'account_id, filename' });
+  // Keep-alive: Heartbeat every 15 minutes
+  const heartbeat = setInterval(async () => {
+    if (sock.authState?.creds?.me) {
+      try {
+        await sock.sendPresenceUpdate('available');
+        logger.info(`💓 Heartbeat sent for ${accountId}`);
+      } catch (e) {
+        logger.warn(`💔 Heartbeat failed for ${accountId}: ${e.message}`);
       }
-    } catch (e) { logger.error('Creds Save Error:', e.message); }
-  });
+    }
+  }, 15 * 60 * 1000);
+
+  sock.ev.on('creds.update', saveCreds);
 
   // ============================================
   // 3. SYNC CONTACTS — récupère TOUS les contacts
@@ -257,7 +283,38 @@ export async function connectToWhatsApp(accountId, onMessage, onEvents) {
   // ============================================
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
-    if (qr && onEvents?.onQR) onEvents.onQR(qr);
+    if (qr) {
+      if (onEvents?.onQR) onEvents.onQR(qr);
+      
+      // Sauvegarder en image pour /whatsapp-qr
+      try {
+        const qrcode = await import('qrcode');
+        const publicPath = path.join(__dirname, '../../web/dist/whatsapp_qr.png');
+        // Ensure directory exists
+        if (!fs.existsSync(path.dirname(publicPath))) fs.mkdirSync(path.dirname(publicPath), { recursive: true });
+        await qrcode.default.toFile(publicPath, qr);
+      } catch (e) {
+        logger.error('QR Image Save Error:', e.message);
+      }
+    }
+
+    // --- PAIRING CODE LOGIC ---
+    if (pairingPhone && !sock.authState.creds.registered && qr) {
+       // Demande du code après 10s pour laisser le temps à la socket de se stabiliser
+       if (!sock._pairingRequested) {
+         sock._pairingRequested = true;
+         logger.info(`📡 [WA] Demande de Pairing Code pour ${pairingPhone} dans 10s...`);
+         setTimeout(async () => {
+           try {
+             const code = await sock.requestPairingCode(pairingPhone.replace(/\D/g, ''));
+             logger.info(`✅ [WA] Pairing Code Reçu : ${code}`);
+             if (onEvents?.onPairingCode) onEvents.onPairingCode(code);
+           } catch (err) {
+             logger.error('Pairing Code Request Error:', err.message);
+           }
+         }, 10000);
+       }
+    }
 
     if (connection === 'close') {
       const statusCode = lastDisconnect?.error?.output?.statusCode;
