@@ -162,7 +162,7 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
       printQRInTerminal: false,
       browser: Browsers.ubuntu('Chrome'), // Identité stable
       logger: pino({ level: 'silent' }),
-      syncFullHistory: false,
+      syncFullHistory: true, // Force la récupération de l'historique
       markOnlineOnConnect: true,
       retryRequestDelayMs: 5000,
     });
@@ -245,52 +245,64 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
     });
 
     sock.ev.on('chats.update', async (updates) => {
-      for (const update of updates) {
-        if (update.archived !== undefined) {
-          const jid = jidNormalizedUser(update.id);
-          await supabase.from('conversations').update({
-            metadata: { is_archived: update.archived === true }
-          }).eq('account_id', accountId).eq('external_id', jid);
+      try {
+        for (const update of updates) {
+          if (update.archived !== undefined) {
+            const jid = jidNormalizedUser(update.id);
+            await supabase.from('conversations').update({
+              metadata: { is_archived: update.archived === true }
+            }).eq('account_id', accountId).eq('external_id', jid);
+          }
         }
+      } catch (e) {
+        logger.error(`[WA-SYNC-ERR] chats.update: ${e.message}`);
       }
     });
 
     sock.ev.on('messaging-history.sync', async ({ chats, contacts, messages, isLatest }) => {
-      logger.info(`[WA] History Sync: ${chats.length} chats, ${messages.length} messages...`);
-      
-      // 1. Sync Chats
-      for (const chat of chats) {
-        const jid = jidNormalizedUser(chat.id);
-        await supabase.from('conversations').upsert({
-          account_id: accountId,
-          external_id: jid,
-          platform: 'whatsapp',
-          title: chat.name || jid.split('@')[0],
-          is_group: chat.id.endsWith('@g.us'),
-          metadata: { is_archived: chat.archived === true },
-          updated_at: new Date()
-        }, { onConflict: 'account_id, external_id' });
-      }
-
-      // 2. Sync Messages
-      for (const msg of messages) {
-        if (!msg.message) continue;
-        const jid = jidNormalizedUser(msg.key.remoteJid);
-        const text = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
+      try {
+        logger.info(`[WA] History Sync Started: ${chats?.length || 0} chats, ${messages?.length || 0} messages...`);
         
-        // Find conversation ID
-        const { data: conv } = await supabase.from('conversations').select('id').eq('account_id', accountId).eq('external_id', jid).single();
-        if (conv) {
-          await supabase.from('messages').upsert({
-            conversation_id: conv.id,
-            account_id: accountId,
-            remote_id: msg.key.id,
-            sender_id: jid,
-            content: text,
-            is_from_me: msg.key.fromMe,
-            timestamp: new Date(msg.messageTimestamp * 1000)
-          }, { onConflict: 'remote_id' });
+        // 1. Sync Chats
+        if (chats) {
+          for (const chat of chats) {
+            const jid = jidNormalizedUser(chat.id);
+            await supabase.from('conversations').upsert({
+              account_id: accountId,
+              external_id: jid,
+              platform: 'whatsapp',
+              title: chat.name || jid.split('@')[0],
+              is_group: chat.id.endsWith('@g.us'),
+              metadata: { is_archived: chat.archived === true },
+              updated_at: new Date()
+            }, { onConflict: 'account_id, external_id' });
+          }
         }
+
+        // 2. Sync Messages
+        if (messages) {
+          for (const msg of messages) {
+            if (!msg.message) continue;
+            const jid = jidNormalizedUser(msg.key.remoteJid);
+            const text = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
+            
+            const { data: conv } = await supabase.from('conversations').select('id').eq('account_id', accountId).eq('external_id', jid).maybeSingle();
+            if (conv) {
+              await supabase.from('messages').upsert({
+                conversation_id: conv.id,
+                account_id: accountId,
+                remote_id: msg.key.id,
+                sender_id: jid,
+                content: text,
+                is_from_me: msg.key.fromMe,
+                timestamp: new Date(msg.messageTimestamp * 1000)
+              }, { onConflict: 'remote_id' });
+            }
+          }
+        }
+        logger.info(`[WA] History Sync Completed successfully.`);
+      } catch (e) {
+        logger.error(`[WA-SYNC-ERR] messaging-history.sync: ${e.message}`);
       }
     });
 
