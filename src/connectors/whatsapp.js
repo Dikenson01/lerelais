@@ -73,6 +73,7 @@ async function useSupabaseAuthState(accountId) {
 
 export async function connectToWhatsApp(accountId, onMessage, onEvents, pairingPhone = null) {
   logger.info(`🌐 Initializing Immortal Connection for ${accountId}...`);
+  const authPath = path.join(__dirname, `../../auth/wa-${accountId}`);
   
   const { state, saveCreds } = await useSupabaseAuthState(accountId);
   const { version } = await fetchLatestBaileysVersion();
@@ -99,6 +100,8 @@ export async function connectToWhatsApp(accountId, onMessage, onEvents, pairingP
       }
     }
   }, 15 * 60 * 1000);
+
+  sock._heartbeat = heartbeat;
 
   sock.ev.on('creds.update', saveCreds);
 
@@ -317,10 +320,11 @@ export async function connectToWhatsApp(accountId, onMessage, onEvents, pairingP
     }
 
     if (connection === 'close') {
+      if (sock._heartbeat) clearInterval(sock._heartbeat);
       const statusCode = lastDisconnect?.error?.output?.statusCode;
       if (statusCode !== DisconnectReason.loggedOut) {
         logger.info('🔄 Reconnexion automatique dans 5s...');
-        setTimeout(() => connectToWhatsApp(accountId, onMessage, onEvents), 5000);
+        setTimeout(() => connectToWhatsApp(accountId, onMessage, onEvents, pairingPhone), 5000);
       } else {
         logger.info('❌ Session WhatsApp déconnectée (logout)');
         await supabase.from('accounts').update({ status: 'disconnected' }).eq('id', accountId);
