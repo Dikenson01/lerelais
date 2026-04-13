@@ -228,6 +228,72 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
       }
     });
 
+    sock.ev.on('chats.upsert', async (chats) => {
+      for (const chat of chats) {
+        const jid = jidNormalizedUser(chat.id);
+        await supabase.from('conversations').upsert({
+          account_id: accountId,
+          external_id: jid,
+          platform: 'whatsapp',
+          title: chat.name || jid.split('@')[0],
+          is_group: chat.id.endsWith('@g.us'),
+          unread_count: chat.unreadCount || 0,
+          metadata: { is_archived: chat.archived === true },
+          updated_at: new Date()
+        }, { onConflict: 'account_id, external_id' });
+      }
+    });
+
+    sock.ev.on('chats.update', async (updates) => {
+      for (const update of updates) {
+        if (update.archived !== undefined) {
+          const jid = jidNormalizedUser(update.id);
+          await supabase.from('conversations').update({
+            metadata: { is_archived: update.archived === true }
+          }).eq('account_id', accountId).eq('external_id', jid);
+        }
+      }
+    });
+
+    sock.ev.on('messaging-history.sync', async ({ chats, contacts, messages, isLatest }) => {
+      logger.info(`[WA] History Sync: ${chats.length} chats, ${messages.length} messages...`);
+      
+      // 1. Sync Chats
+      for (const chat of chats) {
+        const jid = jidNormalizedUser(chat.id);
+        await supabase.from('conversations').upsert({
+          account_id: accountId,
+          external_id: jid,
+          platform: 'whatsapp',
+          title: chat.name || jid.split('@')[0],
+          is_group: chat.id.endsWith('@g.us'),
+          metadata: { is_archived: chat.archived === true },
+          updated_at: new Date()
+        }, { onConflict: 'account_id, external_id' });
+      }
+
+      // 2. Sync Messages
+      for (const msg of messages) {
+        if (!msg.message) continue;
+        const jid = jidNormalizedUser(msg.key.remoteJid);
+        const text = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
+        
+        // Find conversation ID
+        const { data: conv } = await supabase.from('conversations').select('id').eq('account_id', accountId).eq('external_id', jid).single();
+        if (conv) {
+          await supabase.from('messages').upsert({
+            conversation_id: conv.id,
+            account_id: accountId,
+            remote_id: msg.key.id,
+            sender_id: jid,
+            content: text,
+            is_from_me: msg.key.fromMe,
+            timestamp: new Date(msg.messageTimestamp * 1000)
+          }, { onConflict: 'remote_id' });
+        }
+      }
+    });
+
     sock.ev.on('contacts.upsert', async (contacts) => {
       for (const contact of contacts) {
         const jid = jidNormalizedUser(contact.id);
@@ -238,6 +304,15 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
           avatar_url: null,
           metadata: { lid: contact.id.endsWith('@lid') ? contact.id : null }
         }, { onConflict: 'account_id, external_id' });
+      }
+    });
+
+    sock.ev.on('contacts.update', async (updates) => {
+      for (const update of updates) {
+        if (update.imgUrl !== undefined) {
+           const jid = jidNormalizedUser(update.id);
+           await supabase.from('contacts').update({ avatar_url: update.imgUrl }).eq('account_id', accountId).eq('external_id', jid);
+        }
       }
     });
 

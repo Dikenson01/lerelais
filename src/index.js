@@ -217,7 +217,14 @@ app.post('/api/connect/whatsapp', async (req, res) => {
     if (type === 'qr') {
       qrMap.set(accountId, payload);
     } else if (type === 'status') {
-      supabase.from('accounts').update({ status: payload.status }).eq('id', accountId).then(() => {});
+      logger.info(`[WA-STATUS] ${accountId} -> ${payload.status}`);
+      supabase.from('accounts').update({ 
+        status: payload.status,
+        updated_at: new Date().toISOString()
+      }).eq('id', accountId).then(({ error }) => {
+        if (error) logger.error(`[DB-ERROR] Failed to update status: ${error.message}`);
+      });
+      
       if (payload.status === 'connected') {
         qrMap.delete(accountId);
         activeConnectors[accountId] = connector;
@@ -302,22 +309,20 @@ async function cleanupStaleAccounts() {
 }
 
 async function restoreConnectors() {
-  await cleanupStaleAccounts();
-  await repairContactLinks();
-  const { count: accCount } = await supabase.from('accounts').select('*', { count: 'exact', head: true });
-  const { count: convCount } = await supabase.from('conversations').select('*', { count: 'exact', head: true });
-  logger.info(`🔍 Startup DB Check: ${accCount || 0} accounts, ${convCount || 0} conversations in DB`);
+  try {
+    const { data: accounts, error } = await supabase.from('accounts').select('*').eq('status', 'connected');
+    if (error) throw error;
 
-  const { data: accounts } = await supabase.from('accounts').select('*').eq('status', 'connected');
-  if (accounts) {
-    logger.info(`🔄 Attempting to restore ${accounts.length} active connectors...`);
-    for (const acc of accounts) {
-      if (acc.platform === 'whatsapp') {
+    logger.info(`🔍 Startup DB Check: ${accounts?.length || 0} connected accounts found.`);
+    if (accounts && accounts.length > 0) {
+      for (const acc of accounts) {
+        logger.info(`🔄 Restoring WhatsApp: ${acc.id} (${acc.account_name || 'No Name'})`);
         const connector = await connectToWhatsApp(acc.id, (type, payload) => {
           if (type === 'qr') {
             qrMap.set(acc.id, payload);
           } else if (type === 'status') {
-            supabase.from('accounts').update({ status: payload.status }).eq('id', acc.id).then(() => {});
+            logger.info(`[WA-STATUS-RESTORE] ${acc.id} -> ${payload.status}`);
+            supabase.from('accounts').update({ status: payload.status, updated_at: new Date().toISOString() }).eq('id', acc.id).then(() => {});
             if (payload.status === 'connected') {
               qrMap.delete(acc.id);
               activeConnectors[acc.id] = connector;
@@ -329,6 +334,8 @@ async function restoreConnectors() {
         activeConnectors[acc.id] = connector;
       }
     }
+  } catch (err) {
+    logger.error('Failed to restore connectors:', err.message);
   }
 }
 
