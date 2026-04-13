@@ -10,7 +10,9 @@ import {
   RefreshCw,
   ArrowLeft,
   Loader2,
-  Phone
+  Phone,
+  Video,
+  Image as ImageIcon
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import axios from 'axios';
@@ -31,7 +33,8 @@ function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
-
+  const [previewImage, setPreviewImage] = useState(null);
+  
   // Pairing State
   const [pairingStatus, setPairingStatus] = useState(null);
   const [pairingQR, setPairingQR] = useState(null);
@@ -43,7 +46,6 @@ function App() {
     const handleResize = () => setIsMobile(window.innerWidth <= 768);
     window.addEventListener('resize', handleResize);
     preloadData();
-    // Auto-refresh conversations every 5 seconds
     const refreshInterval = setInterval(() => preloadData(), 5000);
     return () => { window.removeEventListener('resize', handleResize); clearInterval(refreshInterval); };
   }, []);
@@ -97,43 +99,40 @@ function App() {
   };
 
   const handleSendMessage = async () => {
-    if (!newMessage.trim() || !selectedConv) return;
+    const text = newMessage.trim();
+    if (!text || !selectedConv) return;
+    setNewMessage(''); // Instant reset for UX
     try {
       await axios.post(`${API_BASE}/messages`, {
         conversationId: selectedConv.id,
-        content: newMessage,
+        content: text,
         accountId: selectedConv.account_id
       });
-      setNewMessage('');
       fetchMessages(selectedConv.id);
     } catch (err) {
       console.error('Send failed:', err);
+      setNewMessage(text); // Restore on failure
     }
   };
 
-  // Ouvrir la conversation d'un contact (ou en créer une)
   const openContactConversation = (contact) => {
-    // Chercher une conversation existante pour ce contact
     const existingConv = conversations.find(c => c.contact_id === contact.id || c.external_id === contact.external_id);
     if (existingConv) {
       setSelectedConv(existingConv);
       setView('inbox');
     } else {
-      // Pas de conversation existante — afficher les infos du contact
-      alert(`📱 ${contact.display_name}\n📞 ${formatPhone(contact.phone_number || contact.external_id?.split('@')[0])}`);
+      alert(`Infos Contact: ${contact.display_name}\n${contact.phone_number || contact.external_id}`);
     }
   };
 
   const formatPhone = (phone) => {
     if (!phone) return '';
-    // Format français: +33 X XX XX XX XX
     if (phone.startsWith('33') && phone.length >= 11) {
       return `+${phone.slice(0, 2)} ${phone.slice(2, 3)} ${phone.slice(3, 5)} ${phone.slice(5, 7)} ${phone.slice(7, 9)} ${phone.slice(9, 11)}`;
     }
     return `+${phone}`;
   };
 
-  // Pairing Logic
   const startWhatsAppPairing = async () => {
     setPairingStatus('initiating');
     try {
@@ -141,7 +140,6 @@ function App() {
       setPairingId(res.data.accountId);
       setPairingStatus('waiting_qr');
     } catch (err) {
-      console.error('Pairing fail:', err);
       setPairingStatus(null);
     }
   };
@@ -156,24 +154,24 @@ function App() {
         setPairingId(null);
         setPairingQR(null);
         preloadData();
-        setTimeout(() => {
-          setPairingStatus(null);
-          setShowAddModal(false);
-        }, 2000);
+        setTimeout(() => { setPairingStatus(null); setShowAddModal(false); }, 2000);
       }
     } catch (e) {}
   };
 
-  const filteredConvs = conversations.filter(c =>
-    c.title?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    c.external_id?.includes(searchQuery)
-  );
+  // 7. ARCHIVES: Filtrage des conversations archivées
+  const filteredConvs = conversations.filter(c => {
+    const matchesSearch = c.title?.toLowerCase().includes(searchQuery.toLowerCase()) || c.external_id?.includes(searchQuery);
+    const isArchived = c.metadata?.is_archived === true;
+    return matchesSearch && !isArchived;
+  });
 
   const filteredContacts = contacts.filter(c =>
     c.display_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    c.phone_number?.includes(searchQuery) ||
-    c.external_id?.includes(searchQuery)
+    c.phone_number?.includes(searchQuery)
   );
+
+  const getDisplayName = (conv) => conv.contacts?.display_name || conv.title || conv.external_id?.split('@')[0] || 'Inconnu';
 
   if (loading) {
     return (
@@ -181,7 +179,7 @@ function App() {
         <div className="loading-content">
           <RefreshCw className="spinner" size={40} />
           <h1>LeRelais</h1>
-          <p>Initialisation de votre espace premium...</p>
+          <p>Initialisation...</p>
         </div>
       </div>
     );
@@ -189,173 +187,97 @@ function App() {
 
   return (
     <div className="app-container">
-      {/* Sidebar - Desktop */}
       {!isMobile && (
         <nav className="nav-rail">
-          <div className="brand-icon">
-            <MessageSquare size={24} color="#fff" />
-          </div>
-          <div className={`nav-item ${view === 'inbox' ? 'active' : ''}`} onClick={() => setView('inbox')}>
-            <MessageSquare size={20} />
-          </div>
-          <div className={`nav-item ${view === 'contacts' ? 'active' : ''}`} onClick={() => setView('contacts')}>
-            <Users size={20} />
-          </div>
-          <div className={`nav-item ${view === 'settings' ? 'active' : ''}`} onClick={() => setView('settings')}>
-            <Settings size={20} />
-          </div>
-          <button className="nav-add-btn" onClick={() => setShowAddModal(true)}>
-            <Plus size={24} />
-          </button>
+          <div className="brand-icon"><MessageSquare size={24} color="#fff" /></div>
+          <div className={`nav-item ${view === 'inbox' ? 'active' : ''}`} onClick={() => setView('inbox')}><MessageSquare size={20} /></div>
+          <div className={`nav-item ${view === 'contacts' ? 'active' : ''}`} onClick={() => setView('contacts')}><Users size={20} /></div>
+          <div className={`nav-item ${view === 'settings' ? 'active' : ''}`} onClick={() => setView('settings')}><Settings size={20} /></div>
+          <button className="nav-add-btn" onClick={() => setShowAddModal(true)}><Plus size={24} /></button>
         </nav>
       )}
 
-      {/* List Area */}
       <div className={`list-pane ${(selectedConv || (isMobile && view !== 'inbox' && view !== 'contacts' && view !== 'settings')) ? 'hidden' : ''}`}>
         <header className="pane-header">
           <h1>
             {view === 'inbox' ? 'Messages' : view === 'contacts' ? 'Répertoire' : 'Paramètres'}
-            <span className="badge">{view === 'inbox' ? conversations.length : view === 'contacts' ? contacts.length : ''}</span>
+            <span className="badge">{view === 'inbox' ? filteredConvs.length : view === 'contacts' ? filteredContacts.length : ''}</span>
           </h1>
-          {(view === 'inbox' || view === 'contacts') && (
-            <div className="search-box">
-              <Search size={16} />
-              <input
-                type="text"
-                placeholder="Rechercher partout..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-              />
-            </div>
-          )}
+          <div className="search-box">
+            <Search size={16} />
+            <input type="text" placeholder="Rechercher..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
+          </div>
         </header>
 
         <div className="scroll-area">
-          {view === 'inbox' && (
-            <>
-              {filteredConvs.length === 0 ? (
-                <div className="placeholder-view">
-                  <MessageSquare size={48} className="hero-logo" />
-                  <h3>Boite vide</h3>
-                  <p>Connectez un compte pour voir vos messages.</p>
+          {view === 'inbox' && filteredConvs.map(conv => (
+            <motion.div key={conv.id} className={`conv-card ${selectedConv?.id === conv.id ? 'active' : ''}`} onClick={() => setSelectedConv(conv)}>
+              <div className="avatar-wrap">
+                {conv.contacts?.avatar_url ? <img src={conv.contacts.avatar_url} alt="" /> : <span>{getDisplayName(conv).charAt(0)}</span>}
+                <div className={`platform-dot ${conv.platform}`}></div>
+              </div>
+              <div className="conv-content">
+                <div className="conv-top">
+                  <strong>{getDisplayName(conv)}</strong>
+                  <span className="time">{conv.last_message_at ? new Date(conv.last_message_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}</span>
                 </div>
-              ) : (
-                filteredConvs.map(conv => (
-                  <motion.div
-                    key={conv.id}
-                    className={`conv-card ${selectedConv?.id === conv.id ? 'active' : ''}`}
-                    onClick={() => setSelectedConv(conv)}
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                  >
-                    <div className="avatar-wrap">
-                      {conv.contacts?.avatar_url ? (
-                        <img src={conv.contacts.avatar_url} alt="" />
-                      ) : (
-                        <span>{conv.title?.charAt(0) || '?'}</span>
-                      )}
-                      <div className={`platform-dot ${conv.platform}`}></div>
-                    </div>
-                    <div className="conv-content">
-                      <div className="conv-top">
-                        <strong>{conv.title || 'Inconnu'}</strong>
-                        <span className="time">{conv.last_message_at ? new Date(conv.last_message_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}</span>
-                      </div>
-                      <p>{conv.last_message_preview || 'Aucun message'}</p>
-                    </div>
-                  </motion.div>
-                ))
-              )}
-            </>
-          )}
+                <p>{conv.last_message_preview || 'Aucun message'}</p>
+              </div>
+            </motion.div>
+          ))}
 
-          {view === 'contacts' && (
-            <div className="contact-list">
-              {filteredContacts.length === 0 ? (
-                <div className="placeholder-view">
-                  <Users size={48} className="hero-logo" />
-                  <h3>Aucun contact</h3>
-                  <p>Les contacts seront synchronisés depuis WhatsApp.</p>
-                </div>
-              ) : (
-                filteredContacts.map(contact => (
-                  <div
-                    key={contact.id}
-                    className="conv-card"
-                    onClick={() => openContactConversation(contact)}
-                  >
-                    <div className="avatar-wrap">
-                      {contact.avatar_url ? <img src={contact.avatar_url} alt="" /> : <span>{contact.display_name?.charAt(0)}</span>}
-                    </div>
-                    <div className="conv-content">
-                      <strong>{contact.display_name}</strong>
-                      <p style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        <Phone size={11} />
-                        {formatPhone(contact.phone_number || contact.external_id?.split('@')[0])}
-                      </p>
-                    </div>
-                  </div>
-                ))
-              )}
+          {view === 'contacts' && filteredContacts.map(contact => (
+            <div key={contact.id} className="conv-card" onClick={() => openContactConversation(contact)}>
+              <div className="avatar-wrap">
+                {contact.avatar_url ? <img src={contact.avatar_url} alt="" /> : <span>{contact.display_name?.charAt(0)}</span>}
+              </div>
+              <div className="conv-content">
+                <strong>{contact.display_name}</strong>
+                <p><Phone size={11} /> {formatPhone(contact.phone_number || contact.external_id?.split('@')[0])}</p>
+              </div>
             </div>
-          )}
+          ))}
 
-          {view === 'settings' && (
-            <div className="settings-view">
-              <h3>Comptes Connectés</h3>
-              {accounts.map(acc => (
-                <div key={acc.id} className="account-card">
-                  <div className={`platform-dot ${acc.platform}`} style={{ position: 'relative', border: 'none' }}></div>
-                  <div className="acc-info">
-                    <strong>{acc.account_name || acc.platform}</strong>
-                    <span className={`status-pill ${acc.status}`}>{acc.status}</span>
-                  </div>
-                  <button className="disconnect-btn" onClick={async () => {
-                    await axios.delete(`${API_BASE}/accounts/${acc.id}`);
-                    preloadData();
-                  }}>Déconnecter</button>
-                </div>
-              ))}
-              {accounts.length === 0 && <p className="dim-text">Aucun compte lié.</p>}
+          {view === 'settings' && accounts.map(acc => (
+            <div key={acc.id} className="account-card">
+              <div className={`platform-dot ${acc.platform}`} style={{ position: 'relative', border: 'none' }}></div>
+              <div className="acc-info">
+                <strong>{acc.account_name || acc.platform}</strong>
+                <span className={`status-pill ${acc.status}`}>{acc.status}</span>
+              </div>
+              <button className="disconnect-btn" onClick={async () => { await axios.delete(`${API_BASE}/accounts/${acc.id}`); preloadData(); }}>Déconnecter</button>
             </div>
-          )}
+          ))}
         </div>
       </div>
 
-      {/* Chat Area */}
       <main className={`chat-pane ${!selectedConv && isMobile ? 'hidden' : ''}`}>
         <AnimatePresence mode="wait">
           {selectedConv ? (
-            <motion.div
-              key={selectedConv.id}
-              className="chat-content"
-              initial={{ opacity: 0, x: 20 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -20 }}
-            >
+            <motion.div key={selectedConv.id} className="chat-content" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}>
               <header className="chat-header">
-                {isMobile && (
-                  <button onClick={() => setSelectedConv(null)} className="back-btn">
-                    <ArrowLeft size={20} />
-                  </button>
-                )}
-                <div className="avatar-wrap small">
-                  {selectedConv.contacts?.avatar_url ? <img src={selectedConv.contacts.avatar_url} alt="" /> : <span>{selectedConv.title?.charAt(0)}</span>}
+                {isMobile && <button onClick={() => setSelectedConv(null)} className="back-btn"><ArrowLeft size={20} /></button>}
+                {/* 6. PHOTO CLIQUABLE */}
+                <div className="avatar-wrap small clickable" onClick={() => selectedConv.contacts?.avatar_url && setPreviewImage(selectedConv.contacts.avatar_url)}>
+                  {selectedConv.contacts?.avatar_url ? <img src={selectedConv.contacts.avatar_url} alt="" /> : <span>{getDisplayName(selectedConv).charAt(0)}</span>}
                 </div>
                 <div className="header-info">
-                  <h2>{selectedConv.title}</h2>
-                  <span className="status">{selectedConv.platform === 'whatsapp' ? 'WhatsApp' : 'Instagram'}</span>
+                  <h2>{getDisplayName(selectedConv)}</h2>
+                  <span className="status">{selectedConv.external_id?.split('@')[0]}</span>
+                </div>
+                {/* 4. APPEL DEPUIS LA CONVERSATION */}
+                <div className="chat-actions">
+                  <a href={`tel:${selectedConv.external_id?.split('@')[0]}`} className="action-btn"><Phone size={20} /></a>
+                  <button className="action-btn"><Video size={20} /></button>
                 </div>
               </header>
 
               <div className="messages-area">
-                {messages.length === 0 && (
-                  <div className="placeholder-view" style={{ opacity: 0.4 }}>
-                    <p>Aucun message dans cette conversation.</p>
-                  </div>
-                )}
                 {messages.map(msg => (
                   <div key={msg.id} className={`msg-bubble ${msg.is_from_me ? 'me' : 'them'}`}>
+                    {/* 2. AFFICHAGE DES MÉDIAS */}
+                    {msg.media_type === 'image' && <div className="media-placeholder"><ImageIcon size={24} /> <span>Image reçue</span></div>}
+                    {msg.media_type === 'audio' && <div className="media-placeholder"><RefreshCw size={18} /> <span>Audio reçu</span></div>}
                     {msg.content}
                   </div>
                 ))}
@@ -364,101 +286,47 @@ function App() {
 
               <footer className="chat-footer">
                 <form className="input-group" onSubmit={(e) => { e.preventDefault(); handleSendMessage(); }}>
-                  <input
-                    type="text"
-                    placeholder="Écrire un message..."
-                    value={newMessage}
-                    onChange={(e) => setNewMessage(e.target.value)}
-                  />
-                  <button type="submit" className="send-btn">
-                    <Send size={18} />
-                  </button>
+                  <input type="text" placeholder="Écrire un message..." value={newMessage} onChange={(e) => setNewMessage(e.target.value)} autoFocus />
+                  <button type="submit" className="send-btn" disabled={!newMessage.trim()}><Send size={18} /></button>
                 </form>
               </footer>
             </motion.div>
-          ) : (
-            !isMobile && (
-              <div className="placeholder-view">
-                <div className="brand-icon large">
-                  <MessageSquare size={48} color="#fff" />
-                </div>
-                <h2>LeRelais Hub</h2>
-                <p>Sélectionnez une conversation pour commencer à répondre.</p>
-              </div>
-            )
-          )}
+          ) : !isMobile && <div className="placeholder-view"><h2>LeRelais Hub</h2><p>Sélectionnez une conversation.</p></div>}
         </AnimatePresence>
       </main>
 
-      {/* Mobile Bottom Nav */}
+      {/* Preview Modal */}
+      {previewImage && (
+        <div className="modal-overlay" onClick={() => setPreviewImage(null)}>
+          <img src={previewImage} className="full-preview" alt="" />
+        </div>
+      )}
+
       {isMobile && (
         <nav className="mobile-nav">
-          <div className={`mob-item ${view === 'inbox' ? 'active' : ''}`} onClick={() => { setView('inbox'); setSelectedConv(null); }}>
-            <MessageSquare size={22} />
-          </div>
-          <div className={`mob-item ${view === 'contacts' ? 'active' : ''}`} onClick={() => { setView('contacts'); setSelectedConv(null); }}>
-            <Users size={22} />
-          </div>
-          <div className="mob-add-wrap">
-            <button className="mob-add-btn" onClick={() => setShowAddModal(true)}>
-              <Plus size={28} />
-            </button>
-          </div>
-          <div className={`mob-item ${view === 'settings' ? 'active' : ''}`} onClick={() => { setView('settings'); setSelectedConv(null); }}>
-            <Settings size={22} />
-          </div>
-          <div className="mob-item" onClick={() => preloadData()}>
-            <RefreshCw size={22} />
-          </div>
+          <div className={`mob-item ${view === 'inbox' ? 'active' : ''}`} onClick={() => setView('inbox')}><MessageSquare size={22} /></div>
+          <div className={`mob-item ${view === 'contacts' ? 'active' : ''}`} onClick={() => setView('contacts')}><Users size={22} /></div>
+          <div className="mob-add-wrap"><button className="mob-add-btn" onClick={() => setShowAddModal(true)}><Plus size={28} /></button></div>
+          <div className={`mob-item ${view === 'settings' ? 'active' : ''}`} onClick={() => setView('settings')}><Settings size={22} /></div>
+          <div className="mob-item" onClick={() => preloadData()}><RefreshCw size={22} /></div>
         </nav>
       )}
 
-      {/* Add Account Modal */}
       {showAddModal && (
-        <div className="modal-overlay" onClick={() => { if (!pairingStatus) setShowAddModal(false); }}>
-          <motion.div
-            className="elite-modal"
-            initial={{ scale: 0.9, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            onClick={e => e.stopPropagation()}
-          >
+        <div className="modal-overlay" onClick={() => !pairingStatus && setShowAddModal(false)}>
+          <motion.div className="elite-modal" initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} onClick={e => e.stopPropagation()}>
             {!pairingStatus && <button className="modal-close" onClick={() => setShowAddModal(false)}><X size={20} /></button>}
-
             {pairingStatus ? (
               <div className="pairing-view">
                 <h2>{pairingStatus === 'connected' ? '✅ Connecté !' : 'Scannez le code'}</h2>
-                <p>Ouvrez WhatsApp, puis Appareils connectés, et enfin Connecter un appareil.</p>
-                <div className="qr-container">
-                  {pairingQR ? (
-                    <div className="qr-box">
-                      <QRCode value={pairingQR} size={220} />
-                    </div>
-                  ) : (
-                    <div className="qr-loading">
-                      <Loader2 className="spinner" size={40} />
-                      <p>Génération du QR Code...</p>
-                    </div>
-                  )}
-                </div>
-                {pairingStatus !== 'connected' && (
-                  <button className="cancel-pairing" onClick={() => { setPairingStatus(null); setPairingId(null); setPairingQR(null); }}>Annuler</button>
-                )}
+                <p>WhatsApp &gt; Appareils connectés</p>
+                <div className="qr-container">{pairingQR ? <div className="qr-box"><QRCode value={pairingQR} size={220} /></div> : <Loader2 className="spinner" size={40} />}</div>
+                {pairingStatus !== 'connected' && <button className="cancel-pairing" onClick={() => { setPairingStatus(null); setPairingId(null); setPairingQR(null); }}>Annuler</button>}
               </div>
             ) : (
-              <>
-                <h2>Ajouter un compte</h2>
-                <p>Choisissez une plateforme pour synchroniser vos messages.</p>
-                <div className="platform-list">
-                  <div className="platform-item" onClick={startWhatsAppPairing}>
-                    <div className="platform-dot whatsapp" style={{ position: 'relative', border: 'none' }}></div>
-                    <strong>WhatsApp</strong>
-                  </div>
-                  <div className="platform-item" onClick={() => alert('Instagram arrive bientôt !')}>
-                    <div className="platform-dot instagram" style={{ position: 'relative', border: 'none' }}></div>
-                    <strong>Instagram</strong>
-                  </div>
-                </div>
-              </>
+              <div className="platform-list">
+                <div className="platform-item" onClick={startWhatsAppPairing}><div className="platform-dot whatsapp"></div><strong>WhatsApp</strong></div>
+              </div>
             )}
           </motion.div>
         </div>

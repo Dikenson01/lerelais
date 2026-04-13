@@ -355,6 +355,39 @@ body, html, #root {
 }
 .cancel-pairing:hover { background: rgba(255,255,255,0.1); }
 
+/* --- CHAT ACTIONS (Calls) --- */
+.chat-actions { display: flex; gap: 8px; margin-left: auto; }
+.action-btn { 
+  background: transparent; border: none; color: var(--accent); 
+  padding: 8px; border-radius: var(--radius-md); cursor: pointer;
+  transition: background 0.2s; display: flex; align-items: center; justify-content: center;
+}
+.action-btn:hover { background: rgba(85, 179, 255, 0.1); }
+
+/* --- MEDIA & PREVIEW --- */
+.media-placeholder {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: var(--dim-gray);
+}
+.avatar-wrap.clickable { cursor: pointer; transition: transform 0.2s; }
+.avatar-wrap.clickable:hover { transform: scale(1.05); }
+
+.full-preview {
+  max-width: 90vw;
+  max-height: 90vh;
+  object-fit: contain;
+  border-radius: var(--radius-lg);
+  box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+}
+
 @media (max-width: 768px) {
   .nav-rail { display: none; }
   .list-pane { width: 100%; border-right: none; height: calc(100vh - 72px); }

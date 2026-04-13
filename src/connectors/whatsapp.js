@@ -287,31 +287,17 @@ export async function connectToWhatsApp(accountId, onMessage, onEvents) {
         : '[Média]');
 
       try {
-        // Trouver/créer le contact
-        let contactId = null;
-        if (!jid.endsWith('@g.us')) {
-          const phone = jid.split('@')[0];
-          try {
-            const { data: contact } = await supabase
-              .from('contacts')
-              .upsert({
-                account_id: accountId,
-                external_id: jid,
-                display_name: msg.pushName || phone,
-                phone_number: phone,
-                metadata: { source: 'whatsapp', platform: 'whatsapp' }
-              }, { onConflict: 'account_id, external_id' })
-              .select('id')
-              .single();
-            if (contact) contactId = contact.id;
-          } catch (_) {}
-        }
+        // Détection du type de média
+        const mediaTag = msg.message?.imageMessage ? 'image' 
+                        : msg.message?.audioMessage ? 'audio' 
+                        : msg.message?.videoMessage ? 'video' 
+                        : msg.message?.documentMessage ? 'document' : null;
 
+        // Trouver/créer la conversation (utilisant external_id comme clé)
         const { data: conv } = await supabase.from('conversations').upsert({
           account_id: accountId,
           external_id: jid,
           platform: 'whatsapp',
-          contact_id: contactId,
           title: msg.pushName || jid.split('@')[0],
           last_message_preview: content?.slice(0, 100),
           last_message_at: new Date()
@@ -323,8 +309,9 @@ export async function connectToWhatsApp(accountId, onMessage, onEvents) {
             account_id: accountId,
             remote_id: msg.key.id,
             sender_id: msg.key.fromMe ? 'me' : jid,
-            content,
+            content: content || '',
             is_from_me: !!msg.key.fromMe,
+            media_type: mediaTag,
             timestamp: new Date((msg.messageTimestamp || Date.now() / 1000) * 1000)
           });
         }
