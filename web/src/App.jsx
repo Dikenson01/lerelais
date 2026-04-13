@@ -376,7 +376,7 @@ function App() {
             {pairingStatus ? (
               <div className="pairing-view">
                 <h2>{pairingStatus === 'connected' ? '✅ Connecté !' : 'Scannez le code'}</h2>
-                <p>Ouvrez WhatsApp > Appareils connectés > Connecter un appareil.</p>
+                <p>Ouvrez WhatsApp &gt; Appareils connectés &gt; Connecter un appareil.</p>
                 
                 <div className="qr-container">
                   {pairingQR ? (
