@@ -330,10 +330,67 @@ body, html, #root {
 }
 .platform-item:hover { border-color: var(--accent); background: rgba(85, 179, 255, 0.05); }
 
-/* --- MOBILE --- */
 @media (max-width: 768px) {
   .nav-rail { display: none; }
-  .list-pane { width: 100%; border-right: none; }
-  .chat-pane { position: fixed; inset: 0; background: var(--bg); z-index: 1000; }
-  .hidden { display: none; }
+  .list-pane { width: 100%; border-right: none; height: calc(100vh - 72px); }
+  .list-pane.hidden { display: none; }
+  
+  .chat-pane { position: fixed; inset: 0; background: var(--bg); z-index: 1000; height: calc(100vh - 72px); }
+  .chat-pane.hidden { display: none; }
+
+  /* Mobile Bottom Nav Bar */
+  .mobile-nav {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    height: 72px;
+    background: rgba(12, 13, 14, 0.85);
+    backdrop-filter: blur(20px);
+    border-top: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-around;
+    padding: 0 16px;
+    z-index: 2000;
+  }
+
+  .mob-item {
+    color: var(--dim-gray);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .mob-item.active { color: var(--white); }
+
+  .mob-add-wrap {
+    position: relative;
+    top: -24px;
+  }
+
+  .mob-add-btn {
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    background: var(--white);
+    color: var(--bg);
+    border: none;
+    box-shadow: 0 8px 20px rgba(0,0,0,0.4);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+  }
+
+  .back-btn {
+    background: transparent;
+    border: none;
+    color: var(--white);
+    margin-right: 12px;
+    cursor: pointer;
+  }
 }
