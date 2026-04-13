@@ -65,6 +65,10 @@ body, html, #root {
   position: relative;
 }
 
+.nav-spacer {
+  display: none;
+}
+
 .nav-item.active {
   color: var(--white);
   background: var(--bg-card);
@@ -318,6 +322,13 @@ body, html, #root {
     justify-content: space-around;
     align-items: center;
     gap: 0;
+  }
+
+  .nav-spacer {
+    display: block;
+    width: 60px;
+    height: 1px;
+    flex-shrink: 0;
   }
 
   .nav-item.active::after {

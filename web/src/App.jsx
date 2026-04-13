@@ -222,6 +222,7 @@ function App() {
         <div className="nav-top">
           <div className={`nav-item ${view === 'all' ? 'active' : ''}`} onClick={() => setView('all')}><LayoutGrid size={24} /></div>
           <div className={`nav-item ${view === 'whatsapp' ? 'active' : ''}`} onClick={() => setView('whatsapp')}><Smartphone size={24} /></div>
+          <div className="nav-spacer"></div>
           <div className={`nav-item ${view === 'instagram' ? 'active' : ''}`} onClick={() => setView('instagram')}><Instagram size={24} /></div>
           <div className={`nav-item ${view === 'contacts' ? 'active' : ''}`} onClick={() => setView('contacts')}><Users size={24} /></div>
           <div className={`nav-item ${view === 'settings' ? 'active' : ''}`} onClick={() => setView('settings')}><Settings size={24} /></div>

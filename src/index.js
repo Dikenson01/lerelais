@@ -41,8 +41,7 @@ app.get('/api/accounts', async (req, res) => {
 });
 
 app.get('/api/conversations', async (req, res) => {
-  // Ultra-simple select first to diagnose
-  const { data, error } = await supabase.from('conversations').select('*');
+  const { data, error } = await supabase.from('conversations').select('*, contacts(*)').order('updated_at', { ascending: false });
   if (error) {
     logger.error('CRITICAL DB ERROR /api/conversations:', JSON.stringify(error, null, 2));
     return res.status(500).json({ error: error.message });

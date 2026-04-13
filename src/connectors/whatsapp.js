@@ -133,6 +133,41 @@ export async function connectToWhatsApp(accountId, onMessage, onEvents) {
         }
       }
     }
+    }
+  });
+
+  sock.ev.on('chats.upsert', async (chats) => {
+    for (const chat of chats) {
+      await supabase.from('conversations').upsert({
+        account_id: accountId,
+        external_id: chat.id,
+        platform: 'whatsapp',
+        title: chat.name || chat.id.split('@')[0],
+        last_message_preview: chat.lastMessageRecvTimestamp ? 'Conversation détectée' : null,
+        updated_at: new Date()
+      }, { onConflict: 'account_id, external_id' });
+    }
+  });
+
+  sock.ev.on('contacts.upsert', async (contacts) => {
+    for (const contact of contacts) {
+      await supabase.from('contacts').upsert({
+        account_id: accountId,
+        external_id: contact.id,
+        display_name: contact.name || contact.verifiedName || contact.id.split('@')[0],
+      }, { onConflict: 'account_id, external_id' });
+    }
+  });
+
+  sock.ev.on('contacts.update', async (updates) => {
+    for (const update of updates) {
+      if (update.imgUrl !== undefined) {
+        await supabase.from('contacts').update({ avatar_url: update.imgUrl }).eq('account_id', accountId).eq('external_id', update.id);
+      }
+      if (update.name || update.verifiedName) {
+        await supabase.from('contacts').update({ display_name: update.name || update.verifiedName }).eq('account_id', accountId).eq('external_id', update.id);
+      }
+    }
   });
 
   sock.ev.on('messages.upsert', async (m) => {
