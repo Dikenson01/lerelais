@@ -267,7 +267,7 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
         if (chats) {
           for (const chat of chats) {
             const jid = jidNormalizedUser(chat.id);
-            await supabase.from('conversations').upsert({
+            const { error } = await supabase.from('conversations').upsert({
               account_id: accountId,
               external_id: jid,
               platform: 'whatsapp',
@@ -276,6 +276,9 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
               metadata: { is_archived: chat.archived === true },
               updated_at: new Date()
             }, { onConflict: 'account_id, external_id' });
+            
+            if (error) logger.error(`[WA-DB-SYNC-ERR] Chat ${jid}: ${error.message}`);
+            else logger.info(`[WA-DB-SYNC] Synced chat: ${jid}`);
           }
         }
 
@@ -286,9 +289,12 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
             const jid = jidNormalizedUser(msg.key.remoteJid);
             const text = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
             
-            const { data: conv } = await supabase.from('conversations').select('id').eq('account_id', accountId).eq('external_id', jid).maybeSingle();
+            const { data: conv, error: convErr } = await supabase.from('conversations').select('id').eq('account_id', accountId).eq('external_id', jid).maybeSingle();
+            
+            if (convErr) logger.error(`[WA-DB-SYNC-ERR] FindConv ${jid}: ${convErr.message}`);
+            
             if (conv) {
-              await supabase.from('messages').upsert({
+              const { error: msgErr } = await supabase.from('messages').upsert({
                 conversation_id: conv.id,
                 account_id: accountId,
                 remote_id: msg.key.id,
@@ -297,6 +303,8 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
                 is_from_me: msg.key.fromMe,
                 timestamp: new Date(msg.messageTimestamp * 1000)
               }, { onConflict: 'remote_id' });
+              
+              if (msgErr) logger.error(`[WA-DB-SYNC-ERR] Msg ${msg.key.id}: ${msgErr.message}`);
             }
           }
         }
