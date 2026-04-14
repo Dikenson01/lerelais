@@ -961,4 +961,18 @@ body, html, #root {
 .media-btn:hover { background:var(--bg-hover); color:var(--white); }
 
 /* ─── PLATFORM COMING SOON ────────────────────────────────── */
-.platform-item.coming-soon { opacity:.45; cursor:default; pointer-events:none; }
+.platform-item.coming-soon { opacity:.55; cursor:pointer; }
+.platform-item.coming-soon:hover { border-color: rgba(255,255,255,0.15) !important; background: rgba(255,255,255,0.02) !important; }
+.soon-badge {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .5px;
+  text-transform: uppercase;
+  color: var(--accent);
+  background: rgba(99,102,241,.12);
+  border: 1px solid rgba(99,102,241,.3);
+  border-radius: 20px;
+  padding: 2px 8px;
+  flex-shrink: 0;
+}

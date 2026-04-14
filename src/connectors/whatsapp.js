@@ -163,13 +163,14 @@ const getMediaInfo = (message) => {
 };
 
 const extractContent = (message) => {
+  if (!message) return '';
   return message.conversation
     || message.extendedTextMessage?.text
     || message.imageMessage?.caption
     || message.videoMessage?.caption
     || message.documentMessage?.fileName
-    || message.audioMessage ? '🎵 Message audio' : null
-    || message.stickerMessage ? '🎭 Sticker' : null
+    || (message.audioMessage ? '🎵 Message audio' : null)
+    || (message.stickerMessage ? '🎭 Sticker' : null)
     || '';
 };
 
@@ -546,15 +547,21 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
     sock.ev.on('chats.upsert', async (chats) => {
       for (const chat of chats) {
         const jid = jidNormalizedUser(chat.id);
+        const isGroup = jid.endsWith('@g.us');
+        // Utiliser le vrai timestamp WhatsApp si disponible
+        const lastMsgAt = chat.conversationTimestamp
+          ? new Date(Number(chat.conversationTimestamp) * 1000)
+          : new Date();
+
         await supabase.from('conversations').upsert({
           account_id: accountId,
           external_id: jid,
           platform: 'whatsapp',
           title: chat.name || jid.split('@')[0],
-          is_group: jid.endsWith('@g.us'),
+          is_group: isGroup,
           unread_count: chat.unreadCount || 0,
           metadata: { is_archived: chat.archived === true },
-          last_message_at: new Date()
+          last_message_at: lastMsgAt
         }, { onConflict: 'account_id, external_id' });
       }
     });
@@ -611,12 +618,11 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
 
             const convId = await getOrCreateUnifiedConversation(jid, chat.name, isGroup);
 
-            // Mettre à jour last_message_at avec le vrai timestamp si disponible
+            // Mettre à jour last_message_at avec le vrai timestamp WhatsApp (sans condition lt — le timestamp WA est plus fiable que new Date())
             if (convId && lastMsgAt) {
               await supabase.from('conversations')
                 .update({ last_message_at: lastMsgAt })
-                .eq('id', convId)
-                .lt('last_message_at', lastMsgAt); // Ne remplace que si plus ancien
+                .eq('id', convId);
             }
           }
           logger.info(`[WA-SYNC] Chats synced: ${chats.length}`);

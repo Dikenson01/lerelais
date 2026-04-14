@@ -129,6 +129,19 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
+// Déconnexion (token supprimé côté client, on log juste)
+app.post('/api/auth/logout', async (req, res) => {
+  const authHeader = req.headers['authorization'];
+  if (authHeader?.startsWith('Bearer ')) {
+    try {
+      const token = authHeader.slice(7);
+      const payload = jwt.verify(token, JWT_SECRET);
+      logger.info(`[AUTH] Logout: ${payload.username}`);
+    } catch (e) {}
+  }
+  res.json({ success: true });
+});
+
 // Vérifier session
 app.get('/api/auth/me', async (req, res) => {
   const { data: user } = await supabase.from('relais_users')

@@ -238,6 +238,13 @@ export default function App() {
   const [pairingQR, setPairingQR]         = useState(null);
   const [pairingId, setPairingId]         = useState(null);
 
+  // Toast
+  const [toast, setToast] = useState(null);
+  const showToast = (msg, duration = 3000) => {
+    setToast(msg);
+    setTimeout(() => setToast(null), duration);
+  };
+
   const messagesEndRef = useRef(null);
   const fileInputRef   = useRef(null);
 
@@ -427,11 +434,18 @@ export default function App() {
     return c?.avatar_url || null;
   };
 
-  const filteredConvs = conversations.filter(c =>
-    !c.metadata?.is_archived &&
-    (c.title?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-     c.external_id?.includes(searchQuery))
-  );
+  const filteredConvs = conversations.filter(c => {
+    if (c.metadata?.is_archived) return false;
+    if (!searchQuery) return true;
+    const q = searchQuery.toLowerCase();
+    const contact = Array.isArray(c.contacts) ? c.contacts[0] : c.contacts;
+    return (
+      c.title?.toLowerCase().includes(q) ||
+      c.external_id?.includes(searchQuery) ||
+      contact?.display_name?.toLowerCase().includes(q) ||
+      contact?.phone_number?.includes(searchQuery)
+    );
+  });
   const filteredContacts = contacts.filter(c =>
     c.display_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
     c.phone_number?.includes(searchQuery)
@@ -654,6 +668,19 @@ export default function App() {
         </div>
       )}
 
+      {/* Toast */}
+      <AnimatePresence>
+        {toast && (
+          <motion.div
+            className="toast"
+            initial={{opacity:0,y:20,scale:.95}}
+            animate={{opacity:1,y:0,scale:1}}
+            exit={{opacity:0,y:10,scale:.95}}
+            style={{position:'fixed',bottom:'80px',left:'50%',transform:'translateX(-50%)',background:'rgba(30,30,35,0.95)',border:'1px solid rgba(255,255,255,0.12)',borderRadius:'12px',padding:'10px 18px',color:'var(--white)',fontSize:'14px',fontWeight:500,zIndex:9999,whiteSpace:'nowrap',backdropFilter:'blur(16px)',boxShadow:'0 8px 32px rgba(0,0,0,0.4)'}}
+          >{toast}</motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Mobile nav */}
       {isMobile && !selectedConv && (
         <nav className="mobile-nav">
@@ -687,17 +714,20 @@ export default function App() {
                   <div className="platform-dot whatsapp"/>
                   <div><strong>WhatsApp</strong><br/><small style={{color:'var(--dim-gray)'}}>Via QR code</small></div>
                 </div>
-                <div className="platform-item coming-soon">
+                <div className="platform-item coming-soon" onClick={()=>showToast('Instagram arrive bientôt 🚀')}>
                   <div className="platform-dot instagram"/>
                   <div><strong>Instagram</strong><br/><small style={{color:'var(--dim-gray)'}}>Bientôt disponible</small></div>
+                  <span className="soon-badge">Bientôt</span>
                 </div>
-                <div className="platform-item coming-soon">
+                <div className="platform-item coming-soon" onClick={()=>showToast('Telegram arrive bientôt 🚀')}>
                   <div className="platform-dot" style={{background:'#3a76f0'}}/>
                   <div><strong>Telegram</strong><br/><small style={{color:'var(--dim-gray)'}}>Bientôt disponible</small></div>
+                  <span className="soon-badge">Bientôt</span>
                 </div>
-                <div className="platform-item coming-soon">
+                <div className="platform-item coming-soon" onClick={()=>showToast('Signal arrive bientôt 🚀')}>
                   <div className="platform-dot" style={{background:'#3b7dd8'}}/>
                   <div><strong>Signal</strong><br/><small style={{color:'var(--dim-gray)'}}>Bientôt disponible</small></div>
+                  <span className="soon-badge">Bientôt</span>
                 </div>
               </div>
             )}
