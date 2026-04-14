@@ -1,413 +1,631 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
-  MessageSquare,
-  Users,
-  Settings,
-  Plus,
-  Search,
-  Send,
-  X,
-  RefreshCw,
-  ArrowLeft,
-  Loader2,
-  Phone,
-  Video,
-  Image as ImageIcon
+  MessageSquare, Users, Settings, Plus, Search, Send, X,
+  RefreshCw, ArrowLeft, Loader2, Phone, Video, Image as ImageIcon,
+  LogOut, Lock, Mail, User, Mic, MicOff, Paperclip, Play, Check, CheckCheck
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import axios from 'axios';
 import QRCode from 'react-qr-code';
 import './App.css';
+import logoHub from './assets/logo_hub.jpg';
+import bg1 from './assets/bgs/bg1.png';
+import bg2 from './assets/bgs/bg2.png';
+import bg3 from './assets/bgs/bg3.png';
 
-const API_BASE = '/api';
+const BGS = [bg1, bg2, bg3];
+const API = '/api';
 
-function App() {
-  const [view, setView] = useState('inbox');
-  const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
+// ─── Auth helpers ───────────────────────────────────────────
+const getToken   = () => localStorage.getItem('lr_token');
+const setToken   = (t) => localStorage.setItem('lr_token', t);
+const clearToken = () => localStorage.removeItem('lr_token');
+
+axios.interceptors.request.use(cfg => {
+  const t = getToken();
+  if (t && cfg.url?.startsWith(API)) cfg.headers['Authorization'] = `Bearer ${t}`;
+  return cfg;
+});
+axios.interceptors.response.use(r => r, err => {
+  if (err.response?.status === 401) { clearToken(); window.location.reload(); }
+  return Promise.reject(err);
+});
+
+// ─── Auth Screen ─────────────────────────────────────────────
+function AuthScreen({ onAuth }) {
+  const [mode, setMode]       = useState('login');   // 'login' | 'register'
+  const [username, setUsername] = useState('');
+  const [password, setPass]   = useState('');
+  const [name, setName]       = useState('');
+  const [error, setError]     = useState('');
+  const [loading, setLoading] = useState(false);
+  const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
+  const [bg] = useState(() => BGS[Math.floor(Math.random() * BGS.length)]);
+
+  const handleMouseMove = (e) => {
+    setMousePos({ x: e.clientX, y: e.clientY });
+  };
+
+  const containerVariants = {
+    hidden: { opacity: 0, y: 30 },
+    visible: { 
+      opacity: 1, 
+      y: 0,
+      transition: { 
+        duration: 0.6, 
+        ease: [0.16, 1, 0.3, 1],
+        staggerChildren: 0.1
+      }
+    }
+  };
+
+  const itemVariants = {
+    hidden: { opacity: 0, y: 20 },
+    visible: { opacity: 1, y: 0, transition: { duration: 0.5, ease: [0.16, 1, 0.3, 1] } }
+  };
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setLoading(true); setError('');
+    try {
+      const url  = mode === 'login' ? `${API}/auth/login` : `${API}/auth/register`;
+      const body = mode === 'login' ? { username, password } : { username, password, displayName: name };
+      const { data } = await axios.post(url, body);
+      setToken(data.token);
+      onAuth(data.user);
+    } catch (err) {
+      setError(err.response?.data?.error || 'Erreur de connexion');
+    } finally { setLoading(false); }
+  };
+
+  return (
+    <div className="auth-screen" onMouseMove={handleMouseMove} style={{ backgroundImage: `url(${bg})` }}>
+      <div 
+        className="mouse-glow" 
+        style={{ '--x': `${mousePos.x}px`, '--y': `${mousePos.y}px` }}
+      />
+      <motion.div 
+        className="auth-card"
+        initial="hidden"
+        animate="visible"
+        variants={containerVariants}
+      >
+        <motion.div className="auth-logo" variants={itemVariants} whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
+          <img src={logoHub} alt="LeRelais" style={{ width: '84px', height: '84px', borderRadius: '22px', objectFit: 'cover', boxShadow: '0 10px 30px rgba(0,0,0,0.3)' }} />
+        </motion.div>
+
+        <motion.h1 variants={itemVariants}>LeRelais</motion.h1>
+        <motion.p className="auth-subtitle" variants={itemVariants}>Toutes vos messageries. Un seul endroit.</motion.p>
+
+        <motion.div className="auth-tabs" variants={itemVariants}>
+          <button className={mode === 'login' ? 'active' : ''} onClick={() => setMode('login')}>Connexion</button>
+          <button className={mode === 'register' ? 'active' : ''} onClick={() => setMode('register')}>Créer un compte</button>
+        </motion.div>
+
+        <motion.form onSubmit={submit} className="auth-form" variants={itemVariants}>
+          {mode === 'register' && (
+            <div className="auth-input-wrap">
+              <User size={18} />
+              <input placeholder="Prénom" value={name} onChange={e => setName(e.target.value)} />
+            </div>
+          )}
+          <div className="auth-input-wrap">
+            <Mail size={18} />
+            <input type="text" placeholder="Identifiant" value={username} onChange={e => setUsername(e.target.value)} required />
+          </div>
+          <div className="auth-input-wrap">
+            <Lock size={18} />
+            <input type="password" placeholder="Mot de passe" value={password} onChange={e => setPass(e.target.value)} required />
+          </div>
+          {error && <p className="auth-error">{error}</p>}
+          <button type="submit" className="auth-btn" disabled={loading}>
+            {loading ? <Loader2 className="spinner" size={20} /> : mode === 'login' ? 'Se connecter' : 'Créer mon compte'}
+          </button>
+        </motion.form>
+
+        <motion.p className="auth-platforms" variants={itemVariants}>
+          WhatsApp • Instagram • Telegram • Signal
+        </motion.p>
+      </motion.div>
+    </div>
+  );
+}
+
+// ─── Audio Recorder Hook ──────────────────────────────────────
+function useAudioRecorder(onStop) {
+  const [recording, setRecording] = useState(false);
+  const [seconds, setSeconds]     = useState(0);
+  const mediaRef = useRef(null);
+  const timerRef = useRef(null);
+  const chunksRef = useRef([]);
+
+  const start = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mr = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
+      chunksRef.current = [];
+      mr.ondataavailable = e => { if (e.data.size > 0) chunksRef.current.push(e.data); };
+      mr.onstop = () => {
+        stream.getTracks().forEach(t => t.stop());
+        const blob = new Blob(chunksRef.current, { type: 'audio/ogg; codecs=opus' });
+        onStop(blob);
+        setSeconds(0);
+      };
+      mr.start();
+      mediaRef.current = mr;
+      setRecording(true);
+      timerRef.current = setInterval(() => setSeconds(s => s + 1), 1000);
+    } catch (e) { alert('Microphone non accessible'); }
+  };
+
+  const stop = () => {
+    clearInterval(timerRef.current);
+    mediaRef.current?.stop();
+    setRecording(false);
+  };
+
+  const cancel = () => {
+    clearInterval(timerRef.current);
+    if (mediaRef.current) {
+      mediaRef.current.onstop = null;
+      mediaRef.current.stop();
+    }
+    setRecording(false);
+    setSeconds(0);
+  };
+
+  return { recording, seconds, start, stop, cancel };
+}
+
+// ─── Main App ─────────────────────────────────────────────────
+export default function App() {
+  const [user, setUser]           = useState(null);
+  const [authReady, setAuthReady] = useState(false);
+
+  const [view, setView]                   = useState('inbox');
+  const [isMobile, setIsMobile]           = useState(window.innerWidth <= 768);
   const [conversations, setConversations] = useState([]);
-  const [contacts, setContacts] = useState([]);
-  const [accounts, setAccounts] = useState([]);
-  const [selectedConv, setSelectedConv] = useState(null);
-  const [messages, setMessages] = useState([]);
-  const [newMessage, setNewMessage] = useState('');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [showAddModal, setShowAddModal] = useState(false);
-  const [previewImage, setPreviewImage] = useState(null);
-  
-  // Pairing State
+  const [contacts, setContacts]           = useState([]);
+  const [accounts, setAccounts]           = useState([]);
+  const [selectedConv, setSelectedConv]   = useState(null);
+  const [messages, setMessages]           = useState([]);
+  const [newMessage, setNewMessage]       = useState('');
+  const [searchQuery, setSearchQuery]     = useState('');
+  const [loading, setLoading]             = useState(true);
+  const [showAddModal, setShowAddModal]   = useState(false);
+  const [previewImage, setPreviewImage]   = useState(null);
+  const [sending, setSending]             = useState(false);
+
+  // Pairing
   const [pairingStatus, setPairingStatus] = useState(null);
-  const [pairingQR, setPairingQR] = useState(null);
-  const [pairingId, setPairingId] = useState(null);
+  const [pairingQR, setPairingQR]         = useState(null);
+  const [pairingId, setPairingId]         = useState(null);
 
   const messagesEndRef = useRef(null);
+  const fileInputRef   = useRef(null);
 
+  // Audio recorder
+  const recorder = useAudioRecorder(async (blob) => {
+    await sendMediaBlob(blob, 'audio.ogg', 'audio/ogg');
+  });
+
+  // ── Check auth ───────────────────────────────────────────────
   useEffect(() => {
-    const handleResize = () => setIsMobile(window.innerWidth <= 768);
-    window.addEventListener('resize', handleResize);
-    preloadData();
-    const refreshInterval = setInterval(() => preloadData(), 5000);
-    return () => { window.removeEventListener('resize', handleResize); clearInterval(refreshInterval); };
+    if (!getToken()) { setAuthReady(true); return; }
+    axios.get(`${API}/auth/me`)
+      .then(r => { setUser(r.data); setAuthReady(true); })
+      .catch(() => { clearToken(); setAuthReady(true); });
   }, []);
 
+  // ── Resize ───────────────────────────────────────────────────
   useEffect(() => {
-    if (selectedConv) {
-      fetchMessages(selectedConv.id);
-      const interval = setInterval(() => fetchMessages(selectedConv.id), 3000);
-      return () => clearInterval(interval);
-    }
+    const fn = () => setIsMobile(window.innerWidth <= 768);
+    window.addEventListener('resize', fn);
+    return () => window.removeEventListener('resize', fn);
+  }, []);
+
+  // ── Polling data ─────────────────────────────────────────────
+  useEffect(() => {
+    if (!user) return;
+    preloadData();
+    const id = setInterval(preloadData, 5000);
+    return () => clearInterval(id);
+  }, [user]);
+
+  // ── Messages ─────────────────────────────────────────────────
+  useEffect(() => {
+    if (!selectedConv) return;
+    fetchMessages(selectedConv.id);
+    const id = setInterval(() => fetchMessages(selectedConv.id), 3000);
+    return () => clearInterval(id);
   }, [selectedConv]);
 
+  // ── Pairing polling ───────────────────────────────────────────
   useEffect(() => {
-    let interval;
-    if (pairingId && pairingStatus === 'waiting_qr') {
-      interval = setInterval(checkPairingStatus, 2000);
-    }
-    return () => clearInterval(interval);
+    if (!pairingId || pairingStatus !== 'waiting_qr') return;
+    const id = setInterval(checkPairingStatus, 2000);
+    return () => clearInterval(id);
   }, [pairingId, pairingStatus]);
 
+  // ── Auto scroll messages ───────────────────────────────────────
   useEffect(() => {
-    if (messagesEndRef.current) {
-      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
-    }
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  // ── Auto-QR for existing WA account ───────────────────────────
+  useEffect(() => {
+    const waAcc = accounts.find(a => a.platform === 'whatsapp');
+    if (waAcc && !pairingId) {
+      axios.get(`${API}/connect/whatsapp/status/${waAcc.id}`).then(r => {
+        if (r.data.qr && !pairingQR) {
+          setPairingQR(r.data.qr); setPairingStatus('waiting_qr'); setPairingId(waAcc.id);
+        }
+      }).catch(() => {});
+    }
+  }, [accounts]);
+
+  // ── Data loaders ─────────────────────────────────────────────
   const preloadData = async () => {
     try {
-      const [convs, conts, accs] = await Promise.all([
-        axios.get(`${API_BASE}/conversations`),
-        axios.get(`${API_BASE}/contacts`),
-        axios.get(`${API_BASE}/accounts`)
+      const [c, ct, ac] = await Promise.all([
+        axios.get(`${API}/conversations`),
+        axios.get(`${API}/contacts`),
+        axios.get(`${API}/accounts`)
       ]);
-      setConversations(convs.data);
-      setContacts(conts.data);
-      setAccounts(accs.data);
-    } catch (err) {
-      console.error('Preload failed:', err);
-    } finally {
-      setLoading(false);
-    }
+      setConversations(c.data); setContacts(ct.data); setAccounts(ac.data);
+    } catch (e) { console.error(e); }
+    finally { setLoading(false); }
   };
 
-  const fetchMessages = async (convId) => {
-    try {
-      const res = await axios.get(`${API_BASE}/messages/${convId}`);
-      setMessages(res.data);
-    } catch (err) {
-      console.error('Fetch messages failed:', err);
-    }
+  const fetchMessages = async (cid) => {
+    try { const r = await axios.get(`${API}/messages/${cid}`); setMessages(r.data); } catch (e) {}
   };
 
-  const sendMessage = async (e) => {
+  // ── Send text ─────────────────────────────────────────────────
+  const sendText = async (e) => {
     e.preventDefault();
-    if (!newMessage.trim() || !selectedConv) return;
-
-    const content = newMessage;
-    setNewMessage('');
-
+    if (!newMessage.trim() || !selectedConv || sending) return;
+    const txt = newMessage; setNewMessage(''); setSending(true);
     try {
-      await axios.post(`${API_BASE}/messages`, {
-        conversationId: selectedConv.id,
-        content
-      });
+      await axios.post(`${API}/messages`, { conversationId: selectedConv.id, content: txt });
       fetchMessages(selectedConv.id);
-      preloadData(); // MIROIR : Rafraîchir pour voir la fusion/le tri
     } catch (err) {
-      console.error('Send failed:', err);
-      if (err.response?.status === 404) {
-        alert("Cette conversation a été fusionnée pour éviter les doublons. Le Hub va se rafraîchir.");
-        preloadData();
-        setSelectedConv(null);
-      } else if (err.response?.status === 503) {
-        alert('Session déconnectée. Veuillez scanner à nouveau le QR Code.');
-        setShowAddModal(true);
-        startWhatsAppPairing();
-      } else {
-        alert(err.response?.data?.error || 'Erreur lors de l\'envoi. Vérifiez que votre compte WhatsApp est bien connecté.');
-      }
-      setNewMessage(content); // Restore on failure
-    }
+      setNewMessage(txt);
+      if (err.response?.status === 503) alert('WhatsApp déconnecté. Scannez le QR code.');
+    } finally { setSending(false); }
   };
 
+  // ── Send media ────────────────────────────────────────────────
+  const sendMediaBlob = async (blob, filename, mimetype) => {
+    if (!selectedConv) return;
+    setSending(true);
+    try {
+      const form = new FormData();
+      form.append('file', blob, filename);
+      form.append('conversationId', selectedConv.id);
+      await axios.post(`${API}/messages/media`, form, { headers: { 'Content-Type': 'multipart/form-data' } });
+      fetchMessages(selectedConv.id);
+    } catch (err) {
+      alert(err.response?.data?.error || 'Erreur envoi média');
+    } finally { setSending(false); }
+  };
+
+  const onFileSelect = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    sendMediaBlob(file, file.name, file.type);
+    e.target.value = '';
+  };
+
+  // ── Open contact conv ─────────────────────────────────────────
   const openContactConversation = async (contact) => {
     try {
-      const { data: conv } = await axios.post(`${API_BASE}/conversations/ensure`, { contact_id: contact.id });
-      // Recharger les conversations pour être sûr d'avoir la dernière version
+      const { data: conv } = await axios.post(`${API}/conversations/ensure`, { contact_id: contact.id });
       await preloadData();
-      setSelectedConv(conv);
-      setView('inbox');
-    } catch (err) {
-      console.error('Failed to ensure conversation:', err);
-      alert('Impossible d\'ouvrir la conversation.');
-    }
+      setSelectedConv(conv); setView('inbox');
+    } catch (e) { alert('Impossible d\'ouvrir la conversation.'); }
   };
 
-  const formatPhone = (phone) => {
-    if (!phone) return '';
-    // Si c'est un identifiant LID technique (commence par 9 et est très long)
-    if (phone.length > 13 && (phone.startsWith('9') || phone.startsWith('1'))) {
-      return 'WhatsApp'; // Masquer l'ID technique
-    }
-    if (phone.startsWith('33') && phone.length >= 11) {
-      return `+${phone.slice(0, 2)} ${phone.slice(2, 3)} ${phone.slice(3, 5)} ${phone.slice(5, 7)} ${phone.slice(7, 9)} ${phone.slice(9, 11)}`;
-    }
-    return `+${phone}`;
-  };
-
-  const startWhatsAppPairing = async () => {
+  // ── Pairing ───────────────────────────────────────────────────
+  const startWAPairing = async () => {
     setPairingStatus('initiating');
     try {
-      const res = await axios.post(`${API_BASE}/connect/whatsapp`);
-      setPairingId(res.data.accountId);
-      setPairingStatus('waiting_qr');
-    } catch (err) {
-      setPairingStatus(null);
-    }
+      const r = await axios.post(`${API}/connect/whatsapp`);
+      setPairingId(r.data.accountId); setPairingStatus('waiting_qr');
+    } catch (e) { setPairingStatus(null); }
   };
 
   const checkPairingStatus = async () => {
     if (!pairingId) return;
     try {
-      const res = await axios.get(`${API_BASE}/connect/whatsapp/status/${pairingId}`);
-      if (res.data.qr) setPairingQR(res.data.qr);
-      if (res.data.status === 'connected') {
-        setPairingStatus('connected');
-        setPairingId(null);
-        setPairingQR(null);
+      const r = await axios.get(`${API}/connect/whatsapp/status/${pairingId}`);
+      if (r.data.qr) setPairingQR(r.data.qr);
+      if (r.data.status === 'connected') {
+        setPairingStatus('connected'); setPairingId(null); setPairingQR(null);
         preloadData();
         setTimeout(() => { setPairingStatus(null); setShowAddModal(false); }, 2000);
-      } else if (res.data.status === 'waiting_lock') {
-        setPairingStatus('waiting_lock');
       }
     } catch (e) {}
   };
 
-  // 0. AUTO-QR: Récupérer le QR même pour un compte déjà existant
-  useEffect(() => {
-    const fetchUniversalQR = async () => {
-      const waAcc = accounts.find(a => a.platform === 'whatsapp');
-      if (waAcc && !pairingId) {
-        try {
-          const res = await axios.get(`${API_BASE}/connect/whatsapp/status/${waAcc.id}`);
-          if (res.data.qr && !pairingQR) {
-             setPairingQR(res.data.qr);
-             setPairingStatus('waiting_qr');
-             setPairingId(waAcc.id);
-          }
-        } catch (e) {}
-      }
-    };
-    if (view === 'inbox' || view === 'settings') fetchUniversalQR();
-  }, [accounts, view]);
+  // ── Helpers ───────────────────────────────────────────────────
+  const formatPhone = (phone) => {
+    if (!phone) return '';
+    if (phone.length > 13) return 'WhatsApp';
+    if (phone.startsWith('33') && phone.length >= 11)
+      return `+${phone.slice(0,2)} ${phone.slice(2,3)} ${phone.slice(3,5)} ${phone.slice(5,7)} ${phone.slice(7,9)} ${phone.slice(9,11)}`;
+    return `+${phone}`;
+  };
 
-  // 7. ARCHIVES: Filtrage des conversations archivées
-  const filteredConvs = conversations.filter(c => {
-    const matchesSearch = c.title?.toLowerCase().includes(searchQuery.toLowerCase()) || c.external_id?.includes(searchQuery);
-    const isArchived = c.metadata?.is_archived === true;
-    return matchesSearch && !isArchived;
-  });
+  const getDisplayName = (conv) => {
+    const c = Array.isArray(conv.contacts) ? conv.contacts[0] : conv.contacts;
+    return c?.display_name || conv.title || conv.external_id?.split('@')[0] || '…';
+  };
 
+  const getAvatar = (conv) => {
+    const c = Array.isArray(conv.contacts) ? conv.contacts[0] : conv.contacts;
+    return c?.avatar_url || null;
+  };
+
+  const filteredConvs = conversations.filter(c =>
+    !c.metadata?.is_archived &&
+    (c.title?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+     c.external_id?.includes(searchQuery))
+  );
   const filteredContacts = contacts.filter(c =>
     c.display_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
     c.phone_number?.includes(searchQuery)
   );
 
-  const getDisplayName = (conv) => {
-    const contact = Array.isArray(conv.contacts) ? conv.contacts[0] : conv.contacts;
-    return contact?.display_name || conv.title || conv.external_id?.split('@')[0] || 'Inconnu';
-  };
+  const formatTime = (ts) => ts ? new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+  const fmtSec = (s) => `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
 
-  if (loading) {
-    return (
-      <div className="loading-screen">
-        <div className="loading-content">
-          <RefreshCw className="spinner" size={40} />
-          <h1>LeRelais</h1>
-          <p>Initialisation...</p>
-        </div>
+  // ── Auth gate ─────────────────────────────────────────────────
+  if (!authReady) return <div className="loading-screen"><Loader2 className="spinner" size={40} /></div>;
+  if (!user) return <AuthScreen onAuth={(u) => { setUser(u); }} />;
+
+  if (loading) return (
+    <div className="loading-screen">
+      <div className="loading-content">
+        <RefreshCw className="spinner" size={40} />
+        <h1>LeRelais</h1><p>Chargement…</p>
       </div>
-    );
-  }
+    </div>
+  );
 
+  // ── Render ────────────────────────────────────────────────────
   return (
     <div className="app-container">
+
+      {/* NAV RAIL desktop */}
       {!isMobile && (
         <nav className="nav-rail">
-          <div className="brand-icon"><MessageSquare size={24} color="#fff" /></div>
-          <div className={`nav-item ${view === 'inbox' ? 'active' : ''}`} onClick={() => setView('inbox')}><MessageSquare size={20} /></div>
-          <div className={`nav-item ${view === 'contacts' ? 'active' : ''}`} onClick={() => setView('contacts')}><Users size={20} /></div>
-          <div className={`nav-item ${view === 'settings' ? 'active' : ''}`} onClick={() => setView('settings')}><Settings size={20} /></div>
-          <button className="nav-add-btn" onClick={() => setShowAddModal(true)}><Plus size={24} /></button>
+          <div className="brand-icon" style={{ padding: '4px' }}>
+            <img src={logoHub} alt="" style={{ width: '100%', height: '100%', borderRadius: '8px', objectFit: 'cover' }} />
+          </div>
+          <div className={`nav-item ${view==='inbox'?'active':''}`} onClick={()=>setView('inbox')}><MessageSquare size={20}/></div>
+          <div className={`nav-item ${view==='contacts'?'active':''}`} onClick={()=>setView('contacts')}><Users size={20}/></div>
+          <div className={`nav-item ${view==='settings'?'active':''}`} onClick={()=>setView('settings')}><Settings size={20}/></div>
+          <button className="nav-add-btn" onClick={()=>setShowAddModal(true)}><Plus size={22}/></button>
+          <div style={{marginTop:'auto',marginBottom:'12px'}} className="nav-item" onClick={async()=>{ await axios.post(`${API}/auth/logout`).catch(()=>{}); clearToken(); setUser(null); }} title="Déconnexion"><LogOut size={18}/></div>
         </nav>
       )}
 
-      <div className={`list-pane ${(selectedConv || (isMobile && view !== 'inbox' && view !== 'contacts' && view !== 'settings')) ? 'hidden' : ''}`}>
+      {/* LIST PANE */}
+      <div className={`list-pane ${(selectedConv||(isMobile&&!['inbox','contacts','settings'].includes(view)))?'hidden':''}`}>
         <header className="pane-header">
           <h1>
-            {view === 'inbox' ? 'Messages' : view === 'contacts' ? 'Répertoire' : 'Paramètres'}
-            <span className="badge">{view === 'inbox' ? filteredConvs.length : view === 'contacts' ? filteredContacts.length : ''}</span>
+            {view==='inbox'?'Messages':view==='contacts'?'Répertoire':'Paramètres'}
+            <span className="badge">{view==='inbox'?filteredConvs.length:view==='contacts'?filteredContacts.length:''}</span>
           </h1>
-          <div className="search-box">
-            <Search size={16} />
-            <input type="text" placeholder="Rechercher..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
-          </div>
+          <div className="search-box"><Search size={15}/><input placeholder="Rechercher…" value={searchQuery} onChange={e=>setSearchQuery(e.target.value)}/></div>
         </header>
 
         <div className="scroll-area">
-          {view === 'inbox' && filteredConvs.map(conv => (
-            <motion.div key={conv.id} className={`conv-card ${selectedConv?.id === conv.id ? 'active' : ''}`} onClick={() => setSelectedConv(conv)}>
+          {/* INBOX */}
+          {view==='inbox' && filteredConvs.map(conv=>(
+            <motion.div key={conv.id} className={`conv-card ${selectedConv?.id===conv.id?'active':''}`} onClick={()=>setSelectedConv(conv)}>
               <div className="avatar-wrap">
-                {(() => {
-                  const contact = Array.isArray(conv.contacts) ? conv.contacts[0] : conv.contacts;
-                  if (contact?.avatar_url) return <img src={contact.avatar_url} alt="" />;
-                  if (conv.is_group) return <div className="avatar-placeholder group"><Users size={20} /></div>;
-                  return <span>{getDisplayName(conv).charAt(0)}</span>;
-                })()}
-                <div className={`platform-dot ${conv.platform}`}></div>
+                {getAvatar(conv)?<img src={getAvatar(conv)} alt=""/>:conv.is_group?<div className="avatar-placeholder group"><Users size={18}/></div>:<span>{getDisplayName(conv).charAt(0)}</span>}
+                <div className={`platform-dot ${conv.platform}`}/>
               </div>
               <div className="conv-content">
                 <div className="conv-top">
                   <strong>{getDisplayName(conv)}</strong>
-                  <span className="time">{conv.last_message_at ? new Date(conv.last_message_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}</span>
+                  <span className="time">{formatTime(conv.last_message_at)}</span>
                 </div>
-                <p>{conv.last_message_preview || 'Aucun message'}</p>
+                <p>{conv.last_message_preview||'Aucun message'}</p>
               </div>
             </motion.div>
           ))}
 
-          {view === 'contacts' && filteredContacts.map(contact => (
-            <div key={contact.id} className="conv-card" onClick={() => openContactConversation(contact)}>
+          {/* CONTACTS */}
+          {view==='contacts' && filteredContacts.map(c=>(
+            <div key={c.id} className="conv-card" onClick={()=>openContactConversation(c)}>
               <div className="avatar-wrap">
-                {contact.avatar_url ? <img src={contact.avatar_url} alt="" /> : <span>{contact.display_name?.charAt(0)}</span>}
+                {c.avatar_url?<img src={c.avatar_url} alt=""/>:<span>{c.display_name?.charAt(0)||'?'}</span>}
               </div>
               <div className="conv-content">
-                <strong>{contact.display_name}</strong>
-                <p><Phone size={11} /> {formatPhone(contact.phone_number || contact.external_id?.split('@')[0])}</p>
+                <strong>{c.display_name}</strong>
+                <p><Phone size={11}/> {formatPhone(c.phone_number||c.external_id?.split('@')[0])}</p>
               </div>
             </div>
           ))}
 
-          {view === 'settings' && accounts.map(acc => (
-            <div key={acc.id} className="account-card">
-              <div className={`platform-dot ${acc.platform}`} style={{ position: 'relative', border: 'none' }}></div>
-              <div className="acc-info">
-                <strong>{acc.account_name || acc.platform}</strong>
-                <span className={`status-pill ${acc.status}`}>{acc.status}</span>
+          {/* SETTINGS */}
+          {view==='settings' && (
+            <div className="settings-view">
+              <div className="user-card">
+                <div className="avatar-wrap"><span>{user.displayName?.charAt(0)||user.username?.charAt(0)}</span></div>
+                <div><strong>{user.displayName}</strong><br/><small>{user.username}</small></div>
               </div>
-              <button className="disconnect-btn" onClick={async () => { await axios.delete(`${API_BASE}/accounts/${acc.id}`); preloadData(); }}>Déconnecter</button>
+              <div style={{height:'1px',background:'var(--border)',margin:'12px 0'}}/>
+              <p style={{padding:'0 16px',color:'var(--dim-gray)',fontSize:'12px',textTransform:'uppercase',letterSpacing:'1px'}}>Comptes connectés</p>
+              {accounts.map(acc=>(
+                <div key={acc.id} className="account-card">
+                  <div className={`platform-dot ${acc.platform}`} style={{position:'relative',border:'none'}}/>
+                  <div className="acc-info"><strong>{acc.account_name}</strong><span className={`status-pill ${acc.status}`}>{acc.status}</span></div>
+                  <button className="disconnect-btn" onClick={async()=>{ await axios.delete(`${API}/accounts/${acc.id}`); preloadData(); }}>Déconnecter</button>
+                </div>
+              ))}
+              <div style={{padding:'16px'}}>
+                <button className="auth-btn" style={{width:'100%',opacity:0.7}} onClick={async()=>{ await axios.post(`${API}/auth/logout`).catch(()=>{}); clearToken(); setUser(null); }}>
+                  <LogOut size={16}/> Se déconnecter
+                </button>
+              </div>
             </div>
-          ))}
+          )}
         </div>
       </div>
 
-      <main className={`chat-pane ${!selectedConv && isMobile ? 'hidden' : ''}`}>
+      {/* CHAT PANE */}
+      <main className={`chat-pane ${!selectedConv&&isMobile?'hidden':''}`}>
         <AnimatePresence mode="wait">
           {selectedConv ? (
-            <motion.div key={selectedConv.id} className="chat-content" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}>
+            <motion.div key={selectedConv.id} className="chat-content" initial={{opacity:0,x:20}} animate={{opacity:1,x:0}}>
+              {/* Header */}
               <header className="chat-header">
-                {isMobile && <button onClick={() => setSelectedConv(null)} className="back-btn"><ArrowLeft size={20} /></button>}
-                {/* 6. PHOTO CLIQUABLE */}
-                <div className="avatar-wrap small clickable" onClick={() => {
-                  const contact = Array.isArray(selectedConv.contacts) ? selectedConv.contacts[0] : selectedConv.contacts;
-                  if (contact?.avatar_url) setPreviewImage(contact.avatar_url);
-                }}>
-                  {(() => {
-                    const contact = Array.isArray(selectedConv.contacts) ? selectedConv.contacts[0] : selectedConv.contacts;
-                    return contact?.avatar_url ? <img src={contact.avatar_url} alt="" /> : <span>{getDisplayName(selectedConv).charAt(0)}</span>;
-                  })()}
+                {isMobile && <button onClick={()=>setSelectedConv(null)} className="back-btn"><ArrowLeft size={20}/></button>}
+                <div className="avatar-wrap small clickable" onClick={()=>{ const u=getAvatar(selectedConv); if(u) setPreviewImage(u); }}>
+                  {getAvatar(selectedConv)?<img src={getAvatar(selectedConv)} alt=""/>:<span>{getDisplayName(selectedConv).charAt(0)}</span>}
                 </div>
                 <div className="header-info">
                   <h2>{getDisplayName(selectedConv)}</h2>
-                  <span className="status">{selectedConv.external_id?.split('@')[0]}</span>
+                  <span className="status">{formatPhone(selectedConv.external_id?.split('@')[0])}</span>
                 </div>
-                {/* 4. APPEL DEPUIS LA CONVERSATION */}
                 <div className="chat-actions">
-                  <a href={`tel:${selectedConv.external_id?.split('@')[0]}`} className="action-btn"><Phone size={20} /></a>
-                  <button className="action-btn"><Video size={20} /></button>
+                  <a href={`tel:${selectedConv.external_id?.split('@')[0]}`} className="action-btn"><Phone size={19}/></a>
                 </div>
               </header>
 
+              {/* Messages */}
               <div className="messages-area">
-                {messages.map(msg => (
-                  <div key={msg.id} className={`msg-bubble ${msg.is_from_me ? 'me' : 'them'}`}>
-                    {/* 2. AFFICHAGE DES MÉDIAS */}
-                    {msg.media_type === 'image' && <div className="media-placeholder"><ImageIcon size={24} /> <span>Image reçue</span></div>}
-                    {msg.media_type === 'audio' && <div className="media-placeholder"><RefreshCw size={18} /> <span>Audio reçu</span></div>}
-                    {msg.content}
-                {msg.media_url && (
-                  <div className="message-media">
-                    {msg.media_type === 'image' ? (
-                      <img src={msg.media_url} alt="Media" className="clickable" onClick={() => window.open(msg.media_url, '_blank')} />
-                    ) : msg.media_type === 'video' ? (
-                      <video src={msg.media_url} controls className="message-video" />
-                    ) : (
-                      <a href={msg.media_url} target="_blank" rel="noreferrer" className="file-link">📁 Voir le fichier</a>
-                    )}
-                  </div>
+                {messages.length === 0 && (
+                  <div style={{textAlign:'center',padding:'40px',color:'var(--dim-gray)'}}>Aucun message. Dites bonjour 👋</div>
                 )}
+                {messages.map(msg => (
+                  <div key={msg.id} className={`msg-bubble ${msg.is_from_me?'me':'them'}`}>
+                    {msg.media_url ? (
+                      <div className="message-media">
+                        {msg.media_type==='image' && <img src={msg.media_url} alt="photo" onClick={()=>setPreviewImage(msg.media_url)} style={{maxWidth:'220px',borderRadius:'10px',cursor:'pointer',display:'block'}}/>}
+                        {msg.media_type==='video' && <video src={msg.media_url} controls style={{maxWidth:'220px',borderRadius:'10px'}}/>}
+                        {msg.media_type==='audio' && <audio src={msg.media_url} controls style={{width:'200px'}}/>}
+                        {msg.media_type==='document' && <a href={msg.media_url} target="_blank" rel="noreferrer" className="file-link">📄 {msg.content||'Fichier'}</a>}
+                      </div>
+                    ) : msg.media_type ? (
+                      <div className="media-placeholder">
+                        {msg.media_type==='image'?'📷':msg.media_type==='audio'?'🎵':msg.media_type==='video'?'🎬':'📄'}
+                        <span> {msg.content||msg.media_type}</span>
+                      </div>
+                    ) : null}
+                    {msg.content && !msg.media_url && msg.media_type !== 'audio' && <span>{msg.content}</span>}
+                    <div className="msg-time">
+                      {formatTime(msg.timestamp)}
+                      {msg.is_from_me && <span style={{marginLeft:'4px'}}>{msg.status==='read'?'✓✓':msg.status==='delivered'?'✓✓':'✓'}</span>}
+                    </div>
                   </div>
                 ))}
-                <div ref={messagesEndRef} />
+                <div ref={messagesEndRef}/>
               </div>
 
+              {/* Footer — saisie + médias */}
               <footer className="chat-footer">
-                <form className="input-group" onSubmit={sendMessage}>
-                  <input type="text" placeholder="Écrire un message..." value={newMessage} onChange={(e) => setNewMessage(e.target.value)} autoFocus />
-                  <button type="submit" className="send-btn" disabled={!newMessage.trim()}><Send size={18} /></button>
-                </form>
+                <input ref={fileInputRef} type="file" accept="image/*,video/*,audio/*,.pdf,.doc,.docx" style={{display:'none'}} onChange={onFileSelect}/>
+
+                {recorder.recording ? (
+                  <div className="recording-bar">
+                    <button onClick={recorder.cancel} className="rec-btn cancel"><X size={18}/></button>
+                    <div className="rec-pulse"/>
+                    <span className="rec-time">{fmtSec(recorder.seconds)}</span>
+                    <button onClick={recorder.stop} className="rec-btn send"><Send size={18}/></button>
+                  </div>
+                ) : (
+                  <form className="input-group" onSubmit={sendText}>
+                    <button type="button" className="media-btn" onClick={()=>fileInputRef.current?.click()} title="Joindre un fichier">
+                      <Paperclip size={18}/>
+                    </button>
+                    <input
+                      type="text"
+                      placeholder="Écrire un message…"
+                      value={newMessage}
+                      onChange={e=>setNewMessage(e.target.value)}
+                      autoFocus
+                    />
+                    {newMessage.trim() ? (
+                      <button type="submit" className="send-btn" disabled={sending}>
+                        {sending?<Loader2 className="spinner" size={16}/>:<Send size={16}/>}
+                      </button>
+                    ) : (
+                      <button type="button" className="send-btn" onMouseDown={e=>{e.preventDefault();recorder.start();}} title="Maintenir pour enregistrer">
+                        <Mic size={16}/>
+                      </button>
+                    )}
+                  </form>
+                )}
               </footer>
             </motion.div>
-          ) : !isMobile && <div className="placeholder-view"><h2>LeRelais Hub</h2><p>Sélectionnez une conversation.</p></div>}
+          ) : !isMobile && (
+            <div className="placeholder-view">
+              <MessageSquare size={48} color="var(--dim-gray)"/>
+              <h2>LeRelais Hub</h2>
+              <p>Sélectionnez une conversation pour commencer</p>
+            </div>
+          )}
         </AnimatePresence>
       </main>
 
-      {/* Preview Modal */}
+      {/* Preview image */}
       {previewImage && (
-        <div className="modal-overlay" onClick={() => setPreviewImage(null)}>
-          <img src={previewImage} className="full-preview" alt="" />
+        <div className="modal-overlay" onClick={()=>setPreviewImage(null)}>
+          <img src={previewImage} className="full-preview" alt=""/>
         </div>
       )}
 
-      {isMobile && (
+      {/* Mobile nav */}
+      {isMobile && !selectedConv && (
         <nav className="mobile-nav">
-          <div className={`mob-item ${view === 'inbox' ? 'active' : ''}`} onClick={() => setView('inbox')}><MessageSquare size={22} /></div>
-          <div className={`mob-item ${view === 'contacts' ? 'active' : ''}`} onClick={() => setView('contacts')}><Users size={22} /></div>
-          <div className="mob-add-wrap"><button className="mob-add-btn" onClick={() => setShowAddModal(true)}><Plus size={28} /></button></div>
-          <div className={`mob-item ${view === 'settings' ? 'active' : ''}`} onClick={() => setView('settings')}><Settings size={22} /></div>
-          <div className="mob-item" onClick={() => preloadData()}><RefreshCw size={22} /></div>
+          <div className={`mob-item ${view==='inbox'?'active':''}`} onClick={()=>setView('inbox')}><MessageSquare size={22}/></div>
+          <div className={`mob-item ${view==='contacts'?'active':''}`} onClick={()=>setView('contacts')}><Users size={22}/></div>
+          <div className="mob-add-wrap"><button className="mob-add-btn" onClick={()=>setShowAddModal(true)}><Plus size={26}/></button></div>
+          <div className={`mob-item ${view==='settings'?'active':''}`} onClick={()=>setView('settings')}><Settings size={22}/></div>
+          <div className="mob-item" onClick={preloadData}><RefreshCw size={22}/></div>
         </nav>
       )}
 
+      {/* Modal connexion plateforme */}
       {showAddModal && (
-        <div className="modal-overlay" onClick={() => !pairingStatus && setShowAddModal(false)}>
-          <motion.div className="elite-modal" initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} onClick={e => e.stopPropagation()}>
-            {!pairingStatus && <button className="modal-close" onClick={() => setShowAddModal(false)}><X size={20} /></button>}
+        <div className="modal-overlay" onClick={()=>!pairingStatus&&setShowAddModal(false)}>
+          <motion.div className="elite-modal" initial={{scale:.9,opacity:0}} animate={{scale:1,opacity:1}} onClick={e=>e.stopPropagation()}>
+            {!pairingStatus && <button className="modal-close" onClick={()=>setShowAddModal(false)}><X size={18}/></button>}
+
             {pairingStatus ? (
               <div className="pairing-view">
-                <h2>
-                  {pairingStatus === 'connected' ? '✅ Connecté !' : 
-                   pairingStatus === 'waiting_lock' ? '🛡️ Sécurisation...' :
-                   'Scannez le code'}
-                </h2>
-                <p>
-                  {pairingStatus === 'waiting_lock' ? 
-                   'Une autre instance est en cours d\'initialisation. Veuillez patienter.' : 
-                   'WhatsApp > Appareils connectés'}
-                </p>
+                <h2>{pairingStatus==='connected'?'✅ Connecté !':pairingStatus==='waiting_lock'?'🛡️ Sécurisation…':'Scanner le QR Code'}</h2>
+                <p>{pairingStatus==='waiting_lock'?'Initialisation en cours…':'WhatsApp → Appareils connectés'}</p>
                 <div className="qr-container">
-                  {pairingStatus === 'waiting_lock' ? (
-                    <div className="waiting-box">
-                      <RefreshCw className="spinner" size={40} />
-                    </div>
-                  ) : (
-                    pairingQR ? <div className="qr-box"><QRCode value={pairingQR} size={220} /></div> : <Loader2 className="spinner" size={40} />
-                  )}
+                  {pairingQR?<div className="qr-box"><QRCode value={pairingQR} size={210}/></div>:<Loader2 className="spinner" size={36}/>}
                 </div>
-                {pairingStatus !== 'connected' && <button className="cancel-pairing" onClick={() => { setPairingStatus(null); setPairingId(null); setPairingQR(null); }}>Annuler</button>}
+                {pairingStatus!=='connected'&&<button className="cancel-pairing" onClick={()=>{setPairingStatus(null);setPairingId(null);setPairingQR(null);}}>Annuler</button>}
               </div>
             ) : (
               <div className="platform-list">
-                <div className="platform-item" onClick={startWhatsAppPairing}><div className="platform-dot whatsapp"></div><strong>WhatsApp</strong></div>
+                <h3 style={{margin:'0 0 16px',color:'var(--white)'}}>Connecter une messagerie</h3>
+                <div className="platform-item" onClick={startWAPairing}>
+                  <div className="platform-dot whatsapp"/>
+                  <div><strong>WhatsApp</strong><br/><small style={{color:'var(--dim-gray)'}}>Via QR code</small></div>
+                </div>
+                <div className="platform-item coming-soon">
+                  <div className="platform-dot instagram"/>
+                  <div><strong>Instagram</strong><br/><small style={{color:'var(--dim-gray)'}}>Bientôt disponible</small></div>
+                </div>
+                <div className="platform-item coming-soon">
+                  <div className="platform-dot" style={{background:'#3a76f0'}}/>
+                  <div><strong>Telegram</strong><br/><small style={{color:'var(--dim-gray)'}}>Bientôt disponible</small></div>
+                </div>
+                <div className="platform-item coming-soon">
+                  <div className="platform-dot" style={{background:'#3b7dd8'}}/>
+                  <div><strong>Signal</strong><br/><small style={{color:'var(--dim-gray)'}}>Bientôt disponible</small></div>
+                </div>
               </div>
             )}
           </motion.div>
@@ -416,5 +634,3 @@ function App() {
     </div>
   );
 }
-
-export default App;

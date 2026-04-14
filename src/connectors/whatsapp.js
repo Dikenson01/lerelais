@@ -6,32 +6,41 @@ import makeWASocket, {
   delay,
   jidNormalizedUser,
   BufferJSON,
-  makeCacheableSignalKeyStore
+  makeCacheableSignalKeyStore,
+  downloadMediaMessage
 } from '@whiskeysockets/baileys';
 import { proto } from '@whiskeysockets/baileys';
 import logger from '../utils/logger.js';
 import supabase from '../config/supabase.js';
 import pino from 'pino';
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 /**
- * MOTEUR IMMORTAL v2 (Style "Tim") 
- * Incorpore : 
+ * MOTEUR IMMORTAL v3 - FULL SYNC EDITION
  * 1. Double sauvegarde (Backup)
  * 2. Système de Lock anti-collision (Code 440)
  * 3. Cache de SignalKeyStore (Performance)
  * 4. Identité Browser fixée
+ * 5. Téléchargement de médias (images, vidéos, audio, docs)
+ * 6. Photos de profil automatiques
+ * 7. Historique complet (messages envoyés + reçus)
  */
+
+const MEDIA_BUCKET = 'Le Relais Media';
 
 const useSupabaseAuthState = async (accountId) => {
   const TABLE = 'account_sessions';
-  
-  // Adaptateur de Namespace par préfixe (Garantit compatibilité sans migration DB)
+
   const makeKey = (ns_group, filename) => `NS:${ns_group}:${filename}`;
 
   const writeData = async (data, filename, ns_group = 'active') => {
     try {
       const key = makeKey(ns_group, filename);
-      // Utilisation d'un verrou local simple pour éviter les conflits de duplication
       if (global.wa_db_locks?.[key]) return;
       if (!global.wa_db_locks) global.wa_db_locks = {};
       global.wa_db_locks[key] = true;
@@ -62,12 +71,11 @@ const useSupabaseAuthState = async (accountId) => {
         .maybeSingle();
 
       if (error || !data) {
-        // TENTATIVE DE RESTAURATION DEPUIS LE BACKUP
         if (ns_group === 'active') {
           const backup = await readData(filename, 'backup');
           if (backup) {
              logger.info(`[WA-RECOVERY] Restored ${filename} from backup!`);
-             await writeData(backup, filename, 'active'); // Auto-réparation
+             await writeData(backup, filename, 'active');
              return backup;
           }
         }
@@ -87,9 +95,8 @@ const useSupabaseAuthState = async (accountId) => {
     await supabase.from(TABLE).delete().eq('account_id', accountId).like('filename', 'NS:active:%');
   };
 
-  // --- LOCK SYSTEM (Anti-Conflit 440) ---
   const myInstanceId = `${process.env.RAILWAY_SERVICE_NAME || 'local'}-${process.pid}`;
-  
+
   const checkLock = async () => {
     const lockData = await readData('lock_session', 'lock');
     if (!lockData) return null;
@@ -98,7 +105,6 @@ const useSupabaseAuthState = async (accountId) => {
 
   const claimLock = async () => {
     const current = await checkLock();
-    // Si lock existant par un autre et frais (< 3 min), on échoue
     if (current && current.owner !== myInstanceId && (Date.now() - current.updatedAt) < 180000) {
       return false;
     }
@@ -106,7 +112,6 @@ const useSupabaseAuthState = async (accountId) => {
     return true;
   };
 
-  // Chargement initial
   const creds = await readData('creds.json') || initAuthCreds();
 
   return {
@@ -132,8 +137,6 @@ const useSupabaseAuthState = async (accountId) => {
               const value = data[category][id];
               const filename = `${category}-${id}.json`;
               tasks.push(value ? writeData(value, filename) : removeData(filename));
-              
-              // DOUBLE SAUVEGARDE (Backup) des clés critiques
               if (value && ['creds.json', 'app-state-sync-key'].some(k => filename.includes(k))) {
                 tasks.push(writeData(value, filename, 'backup'));
               }
@@ -149,13 +152,205 @@ const useSupabaseAuthState = async (accountId) => {
   };
 };
 
-export const createWhatsAppConnector = async (accountId, onEvent) => {
+// --- UTILITAIRES MÉDIAS ---
+const getMediaInfo = (message) => {
+  if (message.imageMessage) return { type: 'image', ext: 'jpg', mime: message.imageMessage.mimetype || 'image/jpeg' };
+  if (message.videoMessage) return { type: 'video', ext: 'mp4', mime: message.videoMessage.mimetype || 'video/mp4' };
+  if (message.audioMessage) return { type: 'audio', ext: 'ogg', mime: message.audioMessage.mimetype || 'audio/ogg' };
+  if (message.documentMessage) return { type: 'document', ext: 'bin', mime: message.documentMessage.mimetype || 'application/octet-stream' };
+  if (message.stickerMessage) return { type: 'image', ext: 'webp', mime: 'image/webp' };
+  return null;
+};
+
+const extractContent = (message) => {
+  return message.conversation
+    || message.extendedTextMessage?.text
+    || message.imageMessage?.caption
+    || message.videoMessage?.caption
+    || message.documentMessage?.fileName
+    || message.audioMessage ? '🎵 Message audio' : null
+    || message.stickerMessage ? '🎭 Sticker' : null
+    || '';
+};
+
+export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone = null) => {
   let sock = null;
   let qrCode = null;
   let { state, saveCreds, clearSession, claimLock } = await useSupabaseAuthState(accountId);
 
+  // --- RÉSOLVEUR DE PASSEPORT (défini en dehors de startSocket pour être accessible)
+  let _sock = null; // Référence au socket actuel
+
+  const getContactId = async (jid, pushName = null) => {
+    let { data } = await supabase.from('contacts').select('id, avatar_url, display_name').eq('account_id', accountId).eq('external_id', jid).maybeSingle();
+
+    if (!data && jid.endsWith('@lid')) {
+      const { data: mapping } = await supabase.from('contacts')
+        .select('id, avatar_url, display_name')
+        .eq('account_id', accountId)
+        .filter('metadata->lid', 'eq', jid)
+        .maybeSingle();
+      data = mapping;
+    }
+
+    if (!data && pushName) {
+      const { data: byName } = await supabase.from('contacts')
+        .select('id, avatar_url, display_name')
+        .eq('account_id', accountId)
+        .eq('display_name', pushName)
+        .maybeSingle();
+      data = byName;
+      if (data) {
+        await supabase.from('contacts').update({ metadata: { lid: jid } }).eq('id', data.id);
+      }
+    }
+
+    // Récupérer la photo de profil si manquante — stockage permanent
+    if (data && !data.avatar_url && _sock && !jid.endsWith('@lid')) {
+      try {
+        const cdnUrl = await _sock.profilePictureUrl(jid, 'image').catch(() => null);
+        if (cdnUrl) {
+          const permanentUrl = await downloadAndStoreAvatar(data.id, cdnUrl);
+          if (permanentUrl) {
+            await supabase.from('contacts').update({ avatar_url: permanentUrl }).eq('id', data.id);
+            data.avatar_url = permanentUrl;
+          }
+        }
+      } catch (e) {}
+    }
+    return data?.id;
+  };
+
+  const getOrCreateUnifiedConversation = async (jid, title, isGroup = false) => {
+    let contact_id = await getContactId(jid, isGroup ? null : title);
+
+    if (contact_id) {
+      const { data: existingConvs } = await supabase.from('conversations')
+        .select('id, external_id')
+        .eq('account_id', accountId)
+        .eq('contact_id', contact_id)
+        .order('last_message_at', { ascending: false });
+
+      if (existingConvs && existingConvs.length > 0) {
+        const master = existingConvs[0];
+        if (master.external_id !== jid) {
+          await supabase.from('conversations').update({ external_id: jid, title: title || master.title }).eq('id', master.id);
+        }
+        return master.id;
+      }
+    }
+
+    const { data: byJid } = await supabase.from('conversations').select('id').eq('account_id', accountId).eq('external_id', jid).maybeSingle();
+    if (byJid) return byJid.id;
+
+    const { data: conv } = await supabase.from('conversations').upsert({
+      account_id: accountId,
+      external_id: jid,
+      contact_id: contact_id,
+      platform: 'whatsapp',
+      title: title || jid.split('@')[0],
+      is_group: isGroup,
+      last_message_at: new Date()
+    }, { onConflict: 'account_id, external_id' }).select('id').single();
+
+    return conv?.id;
+  };
+
+  // --- TÉLÉCHARGEMENT PERMANENT DE PHOTO DE PROFIL ---
+  const downloadAndStoreAvatar = async (contactId, cdnUrl) => {
+    try {
+      const res = await fetch(cdnUrl);
+      if (!res.ok) return null;
+      const arrayBuf = await res.arrayBuffer();
+      const buffer = Buffer.from(arrayBuf);
+      if (!buffer || buffer.length === 0) return null;
+
+      const fileName = `avatars/${contactId}.jpg`;
+      const { error } = await supabase.storage
+        .from(MEDIA_BUCKET)
+        .upload(fileName, buffer, { contentType: 'image/jpeg', upsert: true });
+
+      if (error) {
+        logger.error(`[WA-AVATAR] Storage upload failed: ${error.message}`);
+        return null;
+      }
+
+      const { data: urlData } = supabase.storage.from(MEDIA_BUCKET).getPublicUrl(fileName);
+      logger.info(`[WA-AVATAR] Stored avatar for contact ${contactId}`);
+      return urlData.publicUrl;
+    } catch (e) {
+      logger.error(`[WA-AVATAR] Download failed: ${e.message}`);
+      return null;
+    }
+  };
+
+  // --- TÉLÉCHARGEMENT DE MÉDIAS ---
+  const downloadAndStoreMedia = async (msg) => {
+    if (!msg.message) return null;
+    const mediaInfo = getMediaInfo(msg.message);
+    if (!mediaInfo) return null;
+
+    try {
+      const buffer = await downloadMediaMessage(
+        msg,
+        'buffer',
+        {},
+        { logger: pino({ level: 'silent' }), reuploadRequest: _sock?.updateMediaMessage }
+      );
+
+      if (!buffer || buffer.length === 0) return null;
+
+      const fileName = `${accountId}/${msg.key.id}.${mediaInfo.ext}`;
+      const { error } = await supabase.storage
+        .from(MEDIA_BUCKET)
+        .upload(fileName, buffer, { contentType: mediaInfo.mime, upsert: true });
+
+      if (error) {
+        logger.error(`[WA-MEDIA] Storage upload failed: ${error.message}`);
+        return null;
+      }
+
+      const { data: urlData } = supabase.storage.from(MEDIA_BUCKET).getPublicUrl(fileName);
+      logger.info(`[WA-MEDIA] Stored: ${fileName}`);
+      return urlData.publicUrl;
+    } catch (e) {
+      logger.error(`[WA-MEDIA] Download failed for ${msg.key.id}: ${e.message}`);
+      return null;
+    }
+  };
+
+  const upsertContact = async (jid, name, lidValue = null) => {
+    const phone = (!jid.endsWith('@lid') && !jid.endsWith('@g.us')) ? jid.split('@')[0] : null;
+
+    // Upsert sans avatar_url pour ne pas écraser les photos existantes
+    const { data: contact } = await supabase.from('contacts').upsert({
+      account_id: accountId,
+      external_id: jid,
+      display_name: name || jid.split('@')[0],
+      phone_number: phone,
+      metadata: { lid: lidValue }
+    }, { onConflict: 'account_id, external_id', ignoreDuplicates: false })
+    .select('id, avatar_url').single();
+
+    // Fetch photo de profil si absente — stockage permanent dans Supabase Storage
+    if (contact && !contact.avatar_url && _sock && !jid.endsWith('@lid') && !jid.endsWith('@g.us')) {
+      setTimeout(async () => {
+        try {
+          const cdnUrl = await _sock.profilePictureUrl(jid, 'image').catch(() => null);
+          if (cdnUrl) {
+            const permanentUrl = await downloadAndStoreAvatar(contact.id, cdnUrl);
+            if (permanentUrl) {
+              await supabase.from('contacts').update({ avatar_url: permanentUrl }).eq('id', contact.id);
+            }
+          }
+        } catch (e) {}
+      }, 500);
+    }
+
+    return contact;
+  };
+
   const startSocket = async () => {
-    // 1. Tenter de prendre le verrou
     const hasLock = await claimLock();
     if (!hasLock) {
       logger.warn(`[WA-LOCK] Session locked by another instance. Retrying in 30s...`);
@@ -165,19 +360,20 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
     }
 
     const { version } = await fetchLatestBaileysVersion();
-    
+
     sock = makeWASocket({
       version,
       auth: state,
       printQRInTerminal: false,
-      browser: Browsers.ubuntu('Chrome'), // Identité stable
+      browser: Browsers.ubuntu('Chrome'),
       logger: pino({ level: 'silent' }),
-      syncFullHistory: true, // Force la récupération de l'historique
+      syncFullHistory: true,
       markOnlineOnConnect: true,
       retryRequestDelayMs: 5000,
     });
 
-    // Heartbeat Lock (Renouveler le verrou chaque minute)
+    _sock = sock; // Mettre à jour la référence globale
+
     const lockTimer = setInterval(async () => {
       if (sock && (await claimLock())) {
         // Lock renewed
@@ -188,28 +384,20 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
 
     sock.ev.on('creds.update', async () => {
       await saveCreds();
-      // Toujours faire un backup des creds lors de l'update
-      const { state: newState } = await useSupabaseAuthState(accountId);
-      const activeCreds = newState.creds;
-      // Note: useSupabaseAuthState wrap already handles backups in set() but creds.json is manual here
-      // Manual backup for top level creds
       const TABLE = 'account_sessions';
       const key = `NS:backup:creds.json`;
       await supabase.from(TABLE).delete().eq('account_id', accountId).eq('filename', key);
       await supabase.from(TABLE).insert({
         account_id: accountId,
         filename: key,
-        data: JSON.stringify(activeCreds, BufferJSON.replacer)
+        data: JSON.stringify(state.creds, BufferJSON.replacer)
       });
-      logger.info(`[WA-DB] Backup creds updated for ${accountId}`);
     });
 
-    // --- ÉCOUTE DES APPELS (WhatsApp Parity) ---
     sock.ev.on('call', async (calls) => {
       for (const call of calls) {
         if (call.status === 'offer') {
           const jid = jidNormalizedUser(call.from);
-          logger.info(`[WA-CALL] Incoming call from ${jid}`);
           const text = `☎️ Appel WhatsApp entrant de ${jid.split('@')[0]}`;
           const convId = await getOrCreateUnifiedConversation(jid, jid.split('@')[0], false);
           if (convId) {
@@ -235,13 +423,41 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
         qrCode = qr;
         onEvent('qr', qr);
         onEvent('status', { status: 'pairing' });
+        
+        // --- SAUVEGARDE IMAGE QR POUR /whatsapp-qr ---
+        try {
+          const qrcode = await import('qrcode');
+          const publicPath = path.join(__dirname, '../../web/dist/whatsapp_qr.png');
+          if (!fs.existsSync(path.dirname(publicPath))) fs.mkdirSync(path.dirname(publicPath), { recursive: true });
+          await qrcode.default.toFile(publicPath, qr);
+        } catch (e) {
+          logger.error('[WA-QR] Image Save Error:', e.message);
+        }
+      }
+
+      // --- LOGIQUE PAIRING CODE ---
+      if (pairingPhone && !sock?.authState.creds.registered && qr) {
+        if (!sock._pairingRequested) {
+          sock._pairingRequested = true;
+          logger.info(`📡 [WA] Demande de Pairing Code pour ${pairingPhone} dans 10s...`);
+          setTimeout(async () => {
+             try {
+               const code = await sock.requestPairingCode(pairingPhone.replace(/\D/g, ''));
+               logger.info(`✅ [WA] Pairing Code Reçu : ${code}`);
+               onEvent('pairing_code', code);
+             } catch (err) {
+               logger.error('[WA-PAIRING] Error:', err.message);
+             }
+          }, 10000);
+        }
       }
 
       if (connection === 'close') {
         clearInterval(lockTimer);
-        const shouldReconnect = (lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut;
+        _sock = null;
         const statusCode = lastDisconnect?.error?.output?.statusCode;
-        
+        const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+
         logger.warn(`[WA] Connection closed: ${statusCode}. Reconnect: ${shouldReconnect}`);
 
         if (statusCode === DisconnectReason.loggedOut) {
@@ -249,8 +465,7 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
           await clearSession();
           onEvent('status', { status: 'disconnected' });
         } else if (statusCode === 440 || statusCode === 405) {
-          // Conflit ou session expirée
-          logger.info('[WA-STABILITY] Conflict or Expired. Waiting 10s before retry...');
+          logger.info('[WA-STABILITY] Conflict. Waiting 10s before retry...');
           setTimeout(startSocket, 10000);
         } else {
           startSocket();
@@ -262,26 +477,24 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
         onEvent('status', { status: 'connected' });
         logger.info('[WA] Connected successfully!');
 
-        // --- MAINTENANCE DE POST-CONNEXION (Générique pour tous) ---
         setTimeout(async () => {
-          // 1. Unifier les conversations (Passeport Fusion)
+          // 1. Lier les conversations orphelines à leurs contacts
           const { data: convs } = await supabase.from('conversations').select('id, title, external_id, contact_id').eq('account_id', accountId);
           if (convs) {
             const masterMap = {};
             for (const conv of convs) {
               if (!conv.contact_id) {
-                 const cid = await getContactId(conv.external_id, conv.title);
-                 if (cid) {
-                   conv.contact_id = cid;
-                   await supabase.from('conversations').update({ contact_id: cid }).eq('id', conv.id);
-                 }
+                const cid = await getContactId(conv.external_id, conv.title);
+                if (cid) {
+                  conv.contact_id = cid;
+                  await supabase.from('conversations').update({ contact_id: cid }).eq('id', conv.id);
+                }
               }
 
               if (conv.contact_id) {
                 if (!masterMap[conv.contact_id]) {
                   masterMap[conv.contact_id] = conv.id;
                 } else {
-                  // FUSION ATOMIQUE : Déplace les messages vers la boîte "Miroir" principale
                   const masterId = masterMap[conv.contact_id];
                   logger.info(`[WA-PASSPORT] Merging ${conv.id} into master thread ${masterId}`);
                   await supabase.from('messages').update({ conversation_id: masterId }).eq('conversation_id', conv.id);
@@ -291,7 +504,7 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
             }
           }
 
-          // 2. Découverte des Groupes (Miroir Profond)
+          // 2. Découverte des Groupes
           try {
             const groups = await sock.groupFetchAllParticipating();
             for (const [jid, group] of Object.entries(groups)) {
@@ -301,19 +514,32 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
             logger.error(`[WA-GROUP-FETCH-ERR] ${e.message}`);
           }
 
-          // 3. Scan PDP pour tous les contacts sans photo
-          const { data: contacts } = await supabase.from('contacts').select('id, external_id').is('avatar_url', null);
-          if (contacts) {
+          // 3. Scan photos de profil (par lot, progressif)
+          const { data: contacts } = await supabase.from('contacts').select('id, external_id')
+            .is('avatar_url', null)
+            .eq('account_id', accountId)
+            .not('external_id', 'like', '%@lid')
+            .not('external_id', 'like', '%@g.us');
+
+          if (contacts && contacts.length > 0) {
+            logger.info(`[WA-PDP] Fetching ${contacts.length} profile photos (permanent storage)...`);
             for (const contact of contacts) {
               try {
-                const url = await sock.profilePictureUrl(contact.external_id, 'image').catch(() => null);
-                if (url) await supabase.from('contacts').update({ avatar_url: url }).eq('id', contact.id);
-                await delay(1000); // Éviter le bannissement
+                const cdnUrl = await sock.profilePictureUrl(contact.external_id, 'image').catch(() => null);
+                if (cdnUrl) {
+                  const permanentUrl = await downloadAndStoreAvatar(contact.id, cdnUrl);
+                  if (permanentUrl) {
+                    await supabase.from('contacts').update({ avatar_url: permanentUrl }).eq('id', contact.id);
+                  }
+                }
+                await delay(800);
               } catch (e) {}
             }
+            logger.info('[WA-PDP] Profile photo scan complete.');
           }
-          logger.info('[WA-MAINTENANCE] Cleanup and Unification finished.');
-        }, 60000); 
+
+          logger.info('[WA-MAINTENANCE] Post-connection maintenance finished.');
+        }, 30000); // Démarrer 30s après connexion
       }
     });
 
@@ -325,10 +551,10 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
           external_id: jid,
           platform: 'whatsapp',
           title: chat.name || jid.split('@')[0],
-          is_group: chat.id.endsWith('@g.us'),
+          is_group: jid.endsWith('@g.us'),
           unread_count: chat.unreadCount || 0,
           metadata: { is_archived: chat.archived === true },
-          updated_at: new Date()
+          last_message_at: new Date()
         }, { onConflict: 'account_id, external_id' });
       }
     });
@@ -348,184 +574,98 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
       }
     });
 
-    // --- RÉSOLVEUR DE PASSEPORT (Miroir V4) ---
-    const getContactId = async (jid, pushName = null) => {
-      // 1. Recherche directe par JID (PN ou LID)
-      let { data } = await supabase.from('contacts').select('id, avatar_url, display_name').eq('account_id', accountId).eq('external_id', jid).maybeSingle();
-      
-      // 2. Si c'est un LID, chercher s'il est déjà mappé dans les métadonnées d'un autre contact
-      if (!data && jid.endsWith('@lid')) {
-        const { data: mapping } = await supabase.from('contacts')
-          .select('id, avatar_url, display_name')
-          .eq('account_id', accountId)
-          .filter('metadata->lid', 'eq', jid)
-          .maybeSingle();
-        data = mapping;
-      }
-
-      // 3. (ULTIME) Si on n'a toujours rien mais qu'on a un nom (Miroir Radical)
-      if (!data && pushName) {
-        const { data: byName } = await supabase.from('contacts')
-          .select('id, avatar_url, display_name')
-          .eq('account_id', accountId)
-          .eq('display_name', pushName)
-          .maybeSingle();
-        data = byName;
-        // On lie l'ID technique au contact trouvé immédiatement
-        if (data) {
-          await supabase.from('contacts').update({ metadata: { lid: jid } }).eq('id', data.id);
-        }
-      }
-
-      if (data && !data.avatar_url) {
-        try {
-          const url = await sock.profilePictureUrl(jid, 'image').catch(() => null);
-          if (url) await supabase.from('contacts').update({ avatar_url: url }).eq('id', data.id);
-        } catch (e) {}
-      }
-      return data?.id;
-    };
-
-    const getOrCreateUnifiedConversation = async (jid, title, isGroup = false) => {
-      // 1. Déterminer l'ID du contact
-      let contact_id = await getContactId(jid, isGroup ? null : title);
-      
-      // 2. Tenter de trouver une conversation existante liée à ce CONTACT (Iron Resolver)
-      if (contact_id) {
-        const { data: existingConvs } = await supabase.from('conversations')
-          .select('id, external_id')
-          .eq('account_id', accountId)
-          .eq('contact_id', contact_id)
-          .order('last_message_at', { ascending: false });
-        
-        if (existingConvs && existingConvs.length > 0) {
-          const master = existingConvs[0];
-          // Si on a des doublons, on les marquera pour fusion dans le cycle de maintenance
-          // mais on renvoie déjà le MASTER pour les nouveaux messages
-          if (master.external_id !== jid) {
-            await supabase.from('conversations').update({ external_id: jid, title: title || master.title }).eq('id', master.id);
-          }
-          return master.id;
-        }
-      }
-
-      // 3. Sinon, par JID exact
-      const { data: byJid } = await supabase.from('conversations').select('id').eq('account_id', accountId).eq('external_id', jid).maybeSingle();
-      if (byJid) return byJid.id;
-
-      // 4. Création
-      const { data: conv } = await supabase.from('conversations').upsert({
-        account_id: accountId,
-        external_id: jid,
-        contact_id: contact_id,
-        platform: 'whatsapp',
-        title: title || jid.split('@')[0],
-        is_group: isGroup,
-        last_message_at: new Date()
-      }, { onConflict: 'account_id, external_id' }).select('id').single();
-
-      return conv?.id;
-    };
-
-    sock.ev.on('messaging-history.sync', async ({ chats, contacts: syncContacts, messages }) => {
+    // --- SYNC HISTORIQUE COMPLET ---
+    sock.ev.on('messaging-history.set', async ({ chats, contacts: syncContacts, messages, isLatest }) => {
       try {
-        logger.info(`[WA] Mirror V3 Sync Started: ${chats?.length || 0} chats, ${messages?.length || 0} messages`);
+        logger.info(`[WA] Full Sync: ${chats?.length || 0} chats, ${syncContacts?.length || 0} contacts, ${messages?.length || 0} messages`);
 
-        // 0. Sync Contacts PROFOND (Mapping LID ↔ PN direct)
+        // 1. Sync Contacts
         if (syncContacts) {
           for (const contact of syncContacts) {
             const jid = jidNormalizedUser(contact.id);
+            const isLid = jid.endsWith('@lid');
+            const isGroup = jid.endsWith('@g.us');
+            const phone = (!isLid && !isGroup) ? jid.split('@')[0] : null;
+            const name = contact.name || contact.verifiedName || contact.notify || jid.split('@')[0];
+
             await supabase.from('contacts').upsert({
               account_id: accountId,
               external_id: jid,
-              display_name: contact.name || contact.verifiedName || contact.notify || jid.split('@')[0],
-              phone_number: jid.split('@')[0],
-              metadata: { lid: contact.id.endsWith('@lid') ? jid : null }
-            }, { onConflict: 'account_id, external_id' });
+              display_name: name,
+              phone_number: phone,
+              metadata: { lid: isLid ? jid : null }
+            }, { onConflict: 'account_id, external_id', ignoreDuplicates: false });
           }
+          logger.info(`[WA-SYNC] Contacts synced: ${syncContacts.length}`);
         }
 
-        // 1. Sync Chats & Groupes avec Maintient des Participants
+        // 2. Sync Chats & Groupes
         if (chats) {
           for (const chat of chats) {
             const jid = jidNormalizedUser(chat.id);
             const isGroup = jid.endsWith('@g.us');
-            let groupMeta = {};
-            
-            if (isGroup) {
-              try {
-                const meta = await sock.groupMetadata(jid).catch(() => null);
-                if (meta) {
-                  groupMeta = {
-                    participants: meta.participants.map(p => p.id),
-                    owner: meta.owner,
-                    creation: meta.creation,
-                    desc: meta.desc
-                  };
-                }
-              } catch (e) {}
-            }
-
-            const convId = await getOrCreateUnifiedConversation(jid, chat.name, isGroup);
-            if (convId && isGroup) {
-              await supabase.from('conversations').update({ group_metadata: groupMeta }).eq('id', convId);
-            }
+            await getOrCreateUnifiedConversation(jid, chat.name, isGroup);
           }
+          logger.info(`[WA-SYNC] Chats synced: ${chats.length}`);
         }
 
-        // 2. Sync Historique de Messages (Texte + Médias)
-        if (messages) {
+        // 3. Sync Messages Historiques (texte + médias en metadata)
+        if (messages && messages.length > 0) {
+          let synced = 0;
           for (const msg of messages) {
             if (!msg.message) continue;
             const jid = jidNormalizedUser(msg.key.remoteJid);
-            
-            // Extraction du contenu Web/Mobile
-            const content = msg.message.conversation || msg.message.extendedTextMessage?.text || msg.message.imageMessage?.caption || msg.message.videoMessage?.caption || '';
-            const mediaType = msg.message.imageMessage ? 'image' : msg.message.videoMessage ? 'video' : msg.message.audioMessage ? 'audio' : msg.message.documentMessage ? 'document' : null;
 
-            // UNIFICATION ABSOLUE : On résout l'ID de la conversation Maître AVANT d'insérer
+            const content = msg.message.conversation
+              || msg.message.extendedTextMessage?.text
+              || msg.message.imageMessage?.caption
+              || msg.message.videoMessage?.caption
+              || msg.message.documentMessage?.fileName
+              || '';
+
+            const mediaInfo = getMediaInfo(msg.message);
             const convId = await getOrCreateUnifiedConversation(jid, msg.pushName, jid.endsWith('@g.us'));
-            
+
             if (convId) {
               await supabase.from('messages').upsert({
                 conversation_id: convId,
                 account_id: accountId,
                 remote_id: msg.key.id,
                 sender_id: msg.key.fromMe ? accountId : jid,
-                content: content,
-                media_type: mediaType,
-                is_from_me: msg.key.fromMe,
-                timestamp: new Date((msg.messageTimestamp?.low || msg.messageTimestamp || Date.now() / 1000) * 1000)
-              }, { onConflict: 'remote_id' });
+                content: content || (mediaInfo ? `[${mediaInfo.type}]` : ''),
+                media_type: mediaInfo?.type || null,
+                is_from_me: msg.key.fromMe || false,
+                timestamp: new Date((msg.messageTimestamp?.low || msg.messageTimestamp || Date.now() / 1000) * 1000),
+                metadata: {
+                  has_media: !!mediaInfo,
+                  participant: msg.key.participant || null
+                }
+              }, { onConflict: 'remote_id', ignoreDuplicates: true });
+              synced++;
             }
           }
+          logger.info(`[WA-SYNC] Messages synced: ${synced}/${messages.length}`);
         }
-        logger.info(`[WA] Mirror V3 Sync Completed.`);
+
+        logger.info(`[WA] Full sync completed.`);
       } catch (e) {
-        logger.error(`[WA-SYNC-ERR] mirror.v3: ${e.message}`);
+        logger.error(`[WA-SYNC-ERR] messaging-history.set: ${e.message}`);
       }
     });
 
+    // --- CONTACTS ---
     sock.ev.on('contacts.upsert', async (contacts) => {
       for (const contact of contacts) {
         const jid = jidNormalizedUser(contact.id);
         const lid = contact.id.endsWith('@lid') ? jid : null;
         const name = contact.name || contact.notify || jid.split('@')[0];
-        
-        await supabase.from('contacts').upsert({
-          account_id: accountId,
-          external_id: jid,
-          display_name: name,
-          avatar_url: null,
-          metadata: { lid: lid }
-        }, { onConflict: 'account_id, external_id' });
 
-        // Si c'est un LID, on essaie de l'associer à un contact PN existant par le nom
+        await upsertContact(jid, name, lid);
+
         if (lid) {
           const { data: existing } = await supabase.from('contacts').select('id').eq('account_id', accountId).eq('display_name', name).neq('external_id', jid).maybeSingle();
           if (existing) {
-             logger.info(`[WA-PASSPORT] Linking LID ${lid} to existing contact ${name}`);
-             await supabase.from('contacts').update({ metadata: { lid: jid } }).eq('id', existing.id);
+            await supabase.from('contacts').update({ metadata: { lid: jid } }).eq('id', existing.id);
           }
         }
       }
@@ -534,13 +674,29 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
     sock.ev.on('contacts.update', async (updates) => {
       for (const update of updates) {
         const jid = jidNormalizedUser(update.id);
-        
-        // 1. Mise à jour PDP
+
+        // Mise à jour photo de profil — stockage permanent
         if (update.imgUrl !== undefined) {
-           await supabase.from('contacts').update({ avatar_url: update.imgUrl }).eq('account_id', accountId).eq('external_id', jid);
+          let avatarUrl = null;
+          if (update.imgUrl) {
+            // Get contact id first
+            const { data: c } = await supabase.from('contacts').select('id').eq('account_id', accountId).eq('external_id', jid).maybeSingle();
+            if (c) {
+              avatarUrl = await downloadAndStoreAvatar(c.id, update.imgUrl);
+            }
+          }
+          await supabase.from('contacts').update({ avatar_url: avatarUrl })
+            .eq('account_id', accountId).eq('external_id', jid);
         }
 
-        // 2. Mapping LID ↔ PN (Générique)
+        // Mise à jour nom
+        if (update.name || update.notify) {
+          await supabase.from('contacts').update({
+            display_name: update.name || update.notify
+          }).eq('account_id', accountId).eq('external_id', jid);
+        }
+
+        // Mapping LID ↔ PN
         if (update.lid || update.phoneNumber) {
           await supabase.from('contacts').upsert({
             account_id: accountId,
@@ -552,43 +708,79 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
       }
     });
 
-    sock.ev.on('groups.update', async (updates) => {
-      for (const update of updates) {
-        const jid = jidNormalizedUser(update.id);
-        logger.info(`[WA-GROUP] Group info updated: ${jid}`);
-        await getOrCreateUnifiedConversation(jid, update.subject, true);
-        if (update.participants) {
-          // Future: sync participants if needed
-        }
-      }
-    });
-
+    // --- NOUVEAUX MESSAGES (temps réel) ---
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
       if (type !== 'notify') return;
 
       for (const msg of messages) {
-        if (!msg.message || msg.key.fromMe) continue;
+        if (!msg.message) continue;
 
         const jid = jidNormalizedUser(msg.key.remoteJid);
-        const content = msg.message.conversation || msg.message.extendedTextMessage?.text || msg.message.imageMessage?.caption || msg.message.videoMessage?.caption || '';
-        const mediaType = msg.message.imageMessage ? 'image' : msg.message.videoMessage ? 'video' : msg.message.audioMessage ? 'audio' : msg.message.documentMessage ? 'document' : null;
-        
-        // Résolution MIROIR : On utilise l'ID unifié (fusion LID/PN)
-        const convId = await getOrCreateUnifiedConversation(jid, msg.pushName || jid.split('@')[0], jid.endsWith('@g.us'));
+        const isGroup = jid.endsWith('@g.us');
+        const isFromMe = msg.key.fromMe || false;
 
-        if (convId) {
-          await supabase.from('messages').insert({
-            conversation_id: convId,
-            account_id: accountId,
-            remote_id: msg.key.id,
-            sender_id: jid,
-            content: content,
-            media_type: mediaType,
-            is_from_me: false,
-            timestamp: new Date((msg.messageTimestamp?.low || msg.messageTimestamp || Date.now() / 1000) * 1000)
-          });
-          
-          onEvent('message', { jid, text: content, fromMe: false });
+        const content = msg.message.conversation
+          || msg.message.extendedTextMessage?.text
+          || msg.message.imageMessage?.caption
+          || msg.message.videoMessage?.caption
+          || msg.message.documentMessage?.fileName
+          || '';
+
+        const mediaInfo = getMediaInfo(msg.message);
+        const convId = await getOrCreateUnifiedConversation(jid, msg.pushName || jid.split('@')[0], isGroup);
+
+        if (!convId) continue;
+
+        // Télécharger le média si présent
+        let mediaUrl = null;
+        if (mediaInfo) {
+          mediaUrl = await downloadAndStoreMedia(msg);
+        }
+
+        // Insérer le message (envoyé OU reçu)
+        const { data: insertedMsg } = await supabase.from('messages').upsert({
+          conversation_id: convId,
+          account_id: accountId,
+          remote_id: msg.key.id,
+          sender_id: isFromMe ? accountId : (isGroup ? msg.key.participant : jid),
+          content: content || (mediaInfo ? `[${mediaInfo.type}]` : ''),
+          media_type: mediaInfo?.type || null,
+          media_url: mediaUrl,
+          is_from_me: isFromMe,
+          timestamp: new Date((msg.messageTimestamp?.low || msg.messageTimestamp || Date.now() / 1000) * 1000),
+          metadata: { participant: msg.key.participant || null }
+        }, { onConflict: 'remote_id' }).select('id').single();
+
+        // Mettre à jour la preview de la conversation
+        const preview = content || (mediaInfo ? `📷 ${mediaInfo.type.charAt(0).toUpperCase() + mediaInfo.type.slice(1)}` : '');
+        await supabase.from('conversations').update({
+          last_message_preview: preview,
+          last_message_at: new Date()
+        }).eq('id', convId);
+
+        if (!isFromMe) {
+          onEvent('message', { jid, text: preview, fromMe: false });
+        }
+      }
+    });
+
+    sock.ev.on('groups.update', async (updates) => {
+      for (const update of updates) {
+        const jid = jidNormalizedUser(update.id);
+        await getOrCreateUnifiedConversation(jid, update.subject, true);
+      }
+    });
+
+    // Messages mis à jour (statut lu/livré)
+    sock.ev.on('messages.update', async (updates) => {
+      for (const update of updates) {
+        if (update.update?.status !== undefined) {
+          const statusMap = { 1: 'sent', 2: 'delivered', 3: 'read', 4: 'played' };
+          const status = statusMap[update.update.status];
+          if (status) {
+            await supabase.from('messages').update({ status })
+              .eq('remote_id', update.key.id);
+          }
         }
       }
     });
@@ -599,8 +791,22 @@ export const createWhatsAppConnector = async (accountId, onEvent) => {
   return {
     sendMessage: async (jid, text) => {
       if (!sock) return { success: false, error: 'Not connected' };
-      const result = await sock.sendMessage(jid, { text });
-      return { success: true, messageId: result.key.id };
+      try {
+        const result = await sock.sendMessage(jid, { text });
+        return { success: true, messageId: result.key.id };
+      } catch (e) {
+        return { success: false, error: e.message };
+      }
+    },
+    sendMedia: async (jid, mediaPayload) => {
+      if (!sock) return { success: false, error: 'Not connected' };
+      try {
+        const result = await sock.sendMessage(jid, mediaPayload);
+        return { success: true, messageId: result.key.id };
+      } catch (e) {
+        logger.error(`[WA-SEND-MEDIA] ${e.message}`);
+        return { success: false, error: e.message };
+      }
     },
     disconnect: async () => {
       if (sock) sock.end();
