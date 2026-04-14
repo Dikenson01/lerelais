@@ -599,12 +599,25 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
           logger.info(`[WA-SYNC] Contacts synced: ${syncContacts.length}`);
         }
 
-        // 2. Sync Chats & Groupes
+        // 2. Sync Chats & Groupes — avec le vrai timestamp du dernier message
         if (chats) {
           for (const chat of chats) {
             const jid = jidNormalizedUser(chat.id);
             const isGroup = jid.endsWith('@g.us');
-            await getOrCreateUnifiedConversation(jid, chat.name, isGroup);
+            // Utiliser le vrai timestamp WhatsApp pour l'ordre
+            const lastMsgAt = chat.conversationTimestamp
+              ? new Date(Number(chat.conversationTimestamp) * 1000)
+              : null;
+
+            const convId = await getOrCreateUnifiedConversation(jid, chat.name, isGroup);
+
+            // Mettre à jour last_message_at avec le vrai timestamp si disponible
+            if (convId && lastMsgAt) {
+              await supabase.from('conversations')
+                .update({ last_message_at: lastMsgAt })
+                .eq('id', convId)
+                .lt('last_message_at', lastMsgAt); // Ne remplace que si plus ancien
+            }
           }
           logger.info(`[WA-SYNC] Chats synced: ${chats.length}`);
         }

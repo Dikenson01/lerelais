@@ -462,11 +462,8 @@ body, html, #root {
 }
 
 /* ═══════════════════════════════════════════════════════════
-   LUXURY AUTH — Le Relais Premium Identity
+   HUB AUTH — LeRelais Messaging Identity
    ═══════════════════════════════════════════════════════════ */
-
-/* Typographie premium */
-.lx-name, .lx-label { font-family: 'Cormorant Garamond', Georgia, serif; }
 
 /* Fond plein écran */
 .lx-screen {

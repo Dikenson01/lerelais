@@ -31,151 +31,138 @@ axios.interceptors.response.use(r => r, err => {
   return Promise.reject(err);
 });
 
-// ─── Auth Screen — Premium Luxury Edition ─────────────────────
-function AuthScreen({ onAuth }) {
-  const cardRef   = useRef(null);
-  const rafRef    = useRef(null);
-  const [tilt,  setTilt]  = useState({ x: 0, y: 0 });
-  const [light, setLight] = useState({ x: 50, y: 50, show: false });
-  const [mounted, setMounted] = useState(false);
+// ─── Auth Screen — LeRelais Hub Identity ──────────────────────
+const PLATFORMS = [
+  { name: 'WhatsApp',  color: '#25D366', icon: '💬' },
+  { name: 'Instagram', color: '#E1306C', icon: '📸' },
+  { name: 'Telegram',  color: '#229ED9', icon: '✈️' },
+  { name: 'Signal',    color: '#3A76F0', icon: '🔒' },
+];
 
+function AuthScreen({ onAuth }) {
+  const cardRef = useRef(null);
+  const rafRef  = useRef(null);
+  const [tilt,    setTilt]    = useState({ x: 0, y: 0 });
+  const [glow,    setGlow]    = useState({ x: 50, y: 50, on: false });
+  const [mounted, setMounted] = useState(false);
   const [mode,     setMode]     = useState('login');
   const [username, setUsername] = useState('');
   const [password, setPass]     = useState('');
   const [name,     setName]     = useState('');
   const [error,    setError]    = useState('');
   const [loading,  setLoading]  = useState(false);
-  const [bg] = useState(() => BGS[Math.floor(Math.random() * BGS.length)]);
 
-  useEffect(() => { setTimeout(() => setMounted(true), 60); }, []);
+  useEffect(() => { const t = setTimeout(() => setMounted(true), 80); return () => clearTimeout(t); }, []);
 
-  const trackCard = (clientX, clientY) => {
+  const track = (cx, cy) => {
     if (!cardRef.current) return;
-    const rect = cardRef.current.getBoundingClientRect();
-    const x  = clientX - rect.left;
-    const y  = clientY - rect.top;
-    const cx = rect.width  / 2;
-    const cy = rect.height / 2;
+    const r = cardRef.current.getBoundingClientRect();
+    const x = cx - r.left, y = cy - r.top;
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
     rafRef.current = requestAnimationFrame(() => {
-      setTilt({ x: ((y - cy) / cy) * -9, y: ((x - cx) / cx) * 9 });
-      setLight({ x: (x / rect.width) * 100, y: (y / rect.height) * 100, show: true });
+      setTilt({ x: ((y - r.height / 2) / (r.height / 2)) * -8, y: ((x - r.width / 2) / (r.width / 2)) * 8 });
+      setGlow({ x: (x / r.width) * 100, y: (y / r.height) * 100, on: true });
     });
   };
 
-  const onMove  = e => trackCard(e.clientX, e.clientY);
-  const onTouch = e => { if (e.touches[0]) trackCard(e.touches[0].clientX, e.touches[0].clientY); };
-  const onLeave = () => { setTilt({ x: 0, y: 0 }); setLight(l => ({ ...l, show: false })); };
+  const onMove  = e => track(e.clientX, e.clientY);
+  const onTouch = e => e.touches[0] && track(e.touches[0].clientX, e.touches[0].clientY);
+  const onLeave = () => { setTilt({ x: 0, y: 0 }); setGlow(g => ({ ...g, on: false })); };
 
   const submit = async (e) => {
-    e.preventDefault();
-    setLoading(true); setError('');
+    e.preventDefault(); setLoading(true); setError('');
     try {
       const url  = mode === 'login' ? `${API}/auth/login` : `${API}/auth/register`;
       const body = mode === 'login' ? { username, password } : { username, password, displayName: name };
       const { data } = await axios.post(url, body);
-      setToken(data.token);
-      onAuth(data.user);
-    } catch (err) {
-      setError(err.response?.data?.error || 'Erreur de connexion');
-    } finally { setLoading(false); }
-  };
-
-  const cardStyle = {
-    transform: `perspective(1100px) rotateX(${tilt.x}deg) rotateY(${tilt.y}deg) scale(${light.show ? 1.018 : 1})`,
-    transition: light.show
-      ? 'transform 0.08s linear'
-      : 'transform 0.7s cubic-bezier(0.23, 1, 0.32, 1)',
-    opacity: mounted ? 1 : 0,
-    translate: mounted ? '0 0' : '0 28px',
+      setToken(data.token); onAuth(data.user);
+    } catch (err) { setError(err.response?.data?.error || 'Erreur de connexion'); }
+    finally { setLoading(false); }
   };
 
   return (
-    <div className="lx-screen" style={{ backgroundImage: `url(${bg})` }}>
-      {/* Atmospheric overlay */}
-      <div className="lx-atmo" />
-      {/* Grain */}
-      <div className="lx-grain" />
+    <div className="hub-screen">
+      {/* Mesh gradient background animé */}
+      <div className="hub-mesh" />
 
+      {/* Orbes flottants */}
+      <div className="hub-orb hub-orb-1" />
+      <div className="hub-orb hub-orb-2" />
+      <div className="hub-orb hub-orb-3" />
+
+      {/* Carte principale */}
       <div
         ref={cardRef}
-        className="lx-card"
-        style={cardStyle}
-        onMouseMove={onMove}
-        onMouseLeave={onLeave}
-        onTouchMove={onTouch}
-        onTouchEnd={onLeave}
+        className={`hub-card ${mounted ? 'hub-card--in' : ''}`}
+        style={{
+          transform: `perspective(1000px) rotateX(${tilt.x}deg) rotateY(${tilt.y}deg) scale(${glow.on ? 1.015 : 1})`,
+          transition: glow.on ? 'transform 0.08s linear' : 'transform 0.65s cubic-bezier(0.23, 1, 0.32, 1)',
+        }}
+        onMouseMove={onMove} onMouseLeave={onLeave}
+        onTouchMove={onTouch} onTouchEnd={onLeave}
       >
-        {/* Moving light refraction */}
-        <div className="lx-light" style={{
-          background: `radial-gradient(ellipse 220px 180px at ${light.x}% ${light.y}%, rgba(210,178,120,0.13) 0%, transparent 70%)`,
-          opacity: light.show ? 1 : 0,
-          transition: 'opacity 0.3s',
+        {/* Glow curseur */}
+        <div className="hub-cursor-glow" style={{
+          background: `radial-gradient(300px circle at ${glow.x}% ${glow.y}%, rgba(99,102,241,0.12), transparent 70%)`,
+          opacity: glow.on ? 1 : 0,
         }} />
 
-        {/* Gold border shimmer — top edge */}
-        <div className="lx-edge" />
-
-        {/* Logo */}
-        <div className="lx-logo-wrap">
-          <img src={logoHub} alt="Le Relais" className="lx-logo-img" />
-          <div className="lx-logo-ring" />
+        {/* Header */}
+        <div className="hub-header">
+          <div className="hub-logo-wrap">
+            <img src={logoHub} alt="LeRelais" className="hub-logo" />
+            <div className="hub-logo-pulse" />
+          </div>
+          <div className="hub-brand">
+            <h1 className="hub-name">LeRelais</h1>
+            <p className="hub-sub">Toutes vos messageries, un seul endroit</p>
+          </div>
         </div>
 
-        {/* Brand */}
-        <div className="lx-brand">
-          <h1 className="lx-name">Le Relais</h1>
-          <p className="lx-tagline">Toutes vos messageries — un seul endroit</p>
+        {/* Plateformes connectées */}
+        <div className="hub-platforms">
+          {PLATFORMS.map(p => (
+            <div key={p.name} className="hub-platform" title={p.name}>
+              <span className="hub-platform-dot" style={{ background: p.color }} />
+              <span className="hub-platform-name">{p.name}</span>
+            </div>
+          ))}
         </div>
 
-        {/* Ornamental divider */}
-        <div className="lx-divider">
-          <span /><svg width="10" height="10" viewBox="0 0 10 10"><polygon points="5,0 10,5 5,10 0,5" fill="currentColor"/></svg><span />
-        </div>
+        {/* Separator */}
+        <div className="hub-sep" />
 
-        {/* Mode tabs */}
-        <div className="lx-tabs">
-          <button className={mode === 'login' ? 'lx-tab active' : 'lx-tab'} onClick={() => { setMode('login'); setError(''); }}>
+        {/* Tabs */}
+        <div className="hub-tabs">
+          <button className={`hub-tab${mode === 'login' ? ' active' : ''}`} onClick={() => { setMode('login'); setError(''); }}>
             Connexion
           </button>
-          <button className={mode === 'register' ? 'lx-tab active' : 'lx-tab'} onClick={() => { setMode('register'); setError(''); }}>
+          <button className={`hub-tab${mode === 'register' ? ' active' : ''}`} onClick={() => { setMode('register'); setError(''); }}>
             Inscription
           </button>
         </div>
 
         {/* Form */}
-        <form onSubmit={submit} className="lx-form">
+        <form onSubmit={submit} className="hub-form">
           {mode === 'register' && (
-            <div className="lx-field">
-              <label className="lx-label">Prénom</label>
-              <input className="lx-input" placeholder="Votre prénom" value={name} onChange={e => setName(e.target.value)} />
+            <div className="hub-field">
+              <User size={15} className="hub-field-icon" />
+              <input className="hub-input" placeholder="Prénom" value={name} onChange={e => setName(e.target.value)} />
             </div>
           )}
-          <div className="lx-field">
-            <label className="lx-label">Identifiant</label>
-            <input className="lx-input" type="text" placeholder="Votre identifiant" value={username} onChange={e => setUsername(e.target.value)} required autoComplete="username" />
+          <div className="hub-field">
+            <Mail size={15} className="hub-field-icon" />
+            <input className="hub-input" type="text" placeholder="Identifiant" value={username} onChange={e => setUsername(e.target.value)} required autoComplete="username" />
           </div>
-          <div className="lx-field">
-            <label className="lx-label">Mot de passe</label>
-            <input className="lx-input" type="password" placeholder="••••••••" value={password} onChange={e => setPass(e.target.value)} required autoComplete="current-password" />
+          <div className="hub-field">
+            <Lock size={15} className="hub-field-icon" />
+            <input className="hub-input" type="password" placeholder="Mot de passe" value={password} onChange={e => setPass(e.target.value)} required autoComplete="current-password" />
           </div>
-
-          {error && <p className="lx-error">{error}</p>}
-
-          <button type="submit" className="lx-btn" disabled={loading}>
-            <span className="lx-btn-shimmer" />
-            <span className="lx-btn-label">
-              {loading
-                ? <Loader2 size={18} className="spinner" />
-                : mode === 'login' ? 'Se connecter' : 'Créer mon compte'}
-            </span>
+          {error && <p className="hub-error">{error}</p>}
+          <button type="submit" className="hub-btn" disabled={loading}>
+            {loading ? <Loader2 size={16} className="spinner" /> : mode === 'login' ? 'Se connecter' : 'Créer mon compte'}
           </button>
         </form>
-
-        {/* Platforms */}
-        <p className="lx-platforms">
-          WhatsApp&nbsp;&nbsp;·&nbsp;&nbsp;Instagram&nbsp;&nbsp;·&nbsp;&nbsp;Telegram&nbsp;&nbsp;·&nbsp;&nbsp;Signal
-        </p>
       </div>
     </div>
   );
@@ -576,28 +563,41 @@ export default function App() {
                 {messages.length === 0 && (
                   <div style={{textAlign:'center',padding:'40px',color:'var(--dim-gray)'}}>Aucun message. Dites bonjour 👋</div>
                 )}
-                {messages.map(msg => (
-                  <div key={msg.id} className={`msg-bubble ${msg.is_from_me?'me':'them'}`}>
-                    {msg.media_url ? (
-                      <div className="message-media">
-                        {msg.media_type==='image' && <img src={msg.media_url} alt="photo" onClick={()=>setPreviewImage(msg.media_url)} style={{maxWidth:'220px',borderRadius:'10px',cursor:'pointer',display:'block'}}/>}
-                        {msg.media_type==='video' && <video src={msg.media_url} controls style={{maxWidth:'220px',borderRadius:'10px'}}/>}
-                        {msg.media_type==='audio' && <audio src={msg.media_url} controls style={{width:'200px'}}/>}
-                        {msg.media_type==='document' && <a href={msg.media_url} target="_blank" rel="noreferrer" className="file-link">📄 {msg.content||'Fichier'}</a>}
+                {messages.map(msg => {
+                  const hasMedia   = !!msg.media_url;
+                  const isAudio    = msg.media_type === 'audio';
+                  const isImage    = msg.media_type === 'image';
+                  const isVideo    = msg.media_type === 'video';
+                  const isDoc      = msg.media_type === 'document';
+                  const mediaIcon  = isImage?'📷':isAudio?'🎵':isVideo?'🎬':isDoc?'📄':'📎';
+                  const textContent = msg.content && msg.content !== `[${msg.media_type}]` ? msg.content : null;
+
+                  return (
+                    <div key={msg.id} className={`msg-bubble ${msg.is_from_me?'me':'them'}`}>
+                      {/* Média téléchargé */}
+                      {hasMedia && isImage  && <img src={msg.media_url} alt="photo" onClick={()=>setPreviewImage(msg.media_url)} style={{maxWidth:'220px',borderRadius:'10px',cursor:'pointer',display:'block',marginBottom:textContent?'4px':0}}/>}
+                      {hasMedia && isVideo  && <video src={msg.media_url} controls style={{maxWidth:'220px',borderRadius:'10px',display:'block'}}/>}
+                      {hasMedia && isAudio  && <audio src={msg.media_url} controls style={{width:'200px',display:'block'}}/>}
+                      {hasMedia && isDoc    && <a href={msg.media_url} target="_blank" rel="noreferrer" className="file-link">📄 {textContent||'Fichier'}</a>}
+
+                      {/* Média non téléchargé (historique) */}
+                      {!hasMedia && msg.media_type && (
+                        <span style={{opacity:0.6}}>{mediaIcon} {textContent || msg.media_type}</span>
+                      )}
+
+                      {/* Texte pur */}
+                      {!msg.media_type && textContent && <span>{textContent}</span>}
+
+                      {/* Texte légende sous image/vidéo */}
+                      {hasMedia && !isDoc && !isAudio && textContent && <span style={{marginTop:'4px',display:'block'}}>{textContent}</span>}
+
+                      <div className="msg-time">
+                        {formatTime(msg.timestamp)}
+                        {msg.is_from_me && <span style={{marginLeft:'4px'}}>{msg.status==='read'?'✓✓':msg.status==='delivered'?'✓✓':'✓'}</span>}
                       </div>
-                    ) : msg.media_type ? (
-                      <div className="media-placeholder">
-                        {msg.media_type==='image'?'📷':msg.media_type==='audio'?'🎵':msg.media_type==='video'?'🎬':'📄'}
-                        <span> {msg.content||msg.media_type}</span>
-                      </div>
-                    ) : null}
-                    {msg.content && !msg.media_url && msg.media_type !== 'audio' && <span>{msg.content}</span>}
-                    <div className="msg-time">
-                      {formatTime(msg.timestamp)}
-                      {msg.is_from_me && <span style={{marginLeft:'4px'}}>{msg.status==='read'?'✓✓':msg.status==='delivered'?'✓✓':'✓'}</span>}
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
                 <div ref={messagesEndRef}/>
               </div>
 

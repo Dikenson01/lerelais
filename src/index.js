@@ -481,9 +481,8 @@ app.use((req, res, next) => {
 
 async function restoreConnectors() {
   try {
-    const LOCKED_ID = process.env.WHATSAPP_ACCOUNT_ID;
+    // Restaure TOUS les comptes connectés — pas de verrou par ID
     let query = supabase.from('accounts').select('*').eq('status', 'connected').eq('platform', 'whatsapp');
-    if (LOCKED_ID) query = query.eq('id', LOCKED_ID);
 
     const { data: accounts } = await query;
     logger.info(`🔍 Startup: ${accounts?.length || 0} accounts à restaurer`);
