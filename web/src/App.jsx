@@ -31,38 +31,41 @@ axios.interceptors.response.use(r => r, err => {
   return Promise.reject(err);
 });
 
-// ─── Auth Screen ─────────────────────────────────────────────
+// ─── Auth Screen — Premium Luxury Edition ─────────────────────
 function AuthScreen({ onAuth }) {
-  const [mode, setMode]       = useState('login');   // 'login' | 'register'
+  const cardRef   = useRef(null);
+  const rafRef    = useRef(null);
+  const [tilt,  setTilt]  = useState({ x: 0, y: 0 });
+  const [light, setLight] = useState({ x: 50, y: 50, show: false });
+  const [mounted, setMounted] = useState(false);
+
+  const [mode,     setMode]     = useState('login');
   const [username, setUsername] = useState('');
-  const [password, setPass]   = useState('');
-  const [name, setName]       = useState('');
-  const [error, setError]     = useState('');
-  const [loading, setLoading] = useState(false);
-  const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
+  const [password, setPass]     = useState('');
+  const [name,     setName]     = useState('');
+  const [error,    setError]    = useState('');
+  const [loading,  setLoading]  = useState(false);
   const [bg] = useState(() => BGS[Math.floor(Math.random() * BGS.length)]);
 
-  const handleMouseMove = (e) => {
-    setMousePos({ x: e.clientX, y: e.clientY });
+  useEffect(() => { setTimeout(() => setMounted(true), 60); }, []);
+
+  const trackCard = (clientX, clientY) => {
+    if (!cardRef.current) return;
+    const rect = cardRef.current.getBoundingClientRect();
+    const x  = clientX - rect.left;
+    const y  = clientY - rect.top;
+    const cx = rect.width  / 2;
+    const cy = rect.height / 2;
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    rafRef.current = requestAnimationFrame(() => {
+      setTilt({ x: ((y - cy) / cy) * -9, y: ((x - cx) / cx) * 9 });
+      setLight({ x: (x / rect.width) * 100, y: (y / rect.height) * 100, show: true });
+    });
   };
 
-  const containerVariants = {
-    hidden: { opacity: 0, y: 30 },
-    visible: { 
-      opacity: 1, 
-      y: 0,
-      transition: { 
-        duration: 0.6, 
-        ease: [0.16, 1, 0.3, 1],
-        staggerChildren: 0.1
-      }
-    }
-  };
-
-  const itemVariants = {
-    hidden: { opacity: 0, y: 20 },
-    visible: { opacity: 1, y: 0, transition: { duration: 0.5, ease: [0.16, 1, 0.3, 1] } }
-  };
+  const onMove  = e => trackCard(e.clientX, e.clientY);
+  const onTouch = e => { if (e.touches[0]) trackCard(e.touches[0].clientX, e.touches[0].clientY); };
+  const onLeave = () => { setTilt({ x: 0, y: 0 }); setLight(l => ({ ...l, show: false })); };
 
   const submit = async (e) => {
     e.preventDefault();
@@ -78,55 +81,102 @@ function AuthScreen({ onAuth }) {
     } finally { setLoading(false); }
   };
 
+  const cardStyle = {
+    transform: `perspective(1100px) rotateX(${tilt.x}deg) rotateY(${tilt.y}deg) scale(${light.show ? 1.018 : 1})`,
+    transition: light.show
+      ? 'transform 0.08s linear'
+      : 'transform 0.7s cubic-bezier(0.23, 1, 0.32, 1)',
+    opacity: mounted ? 1 : 0,
+    translate: mounted ? '0 0' : '0 28px',
+  };
+
   return (
-    <div className="auth-screen" onMouseMove={handleMouseMove} style={{ backgroundImage: `url(${bg})` }}>
-      <div 
-        className="mouse-glow" 
-        style={{ '--x': `${mousePos.x}px`, '--y': `${mousePos.y}px` }}
-      />
-      <motion.div 
-        className="auth-card"
-        initial="hidden"
-        animate="visible"
-        variants={containerVariants}
+    <div className="lx-screen" style={{ backgroundImage: `url(${bg})` }}>
+      {/* Atmospheric overlay */}
+      <div className="lx-atmo" />
+      {/* Grain */}
+      <div className="lx-grain" />
+
+      <div
+        ref={cardRef}
+        className="lx-card"
+        style={cardStyle}
+        onMouseMove={onMove}
+        onMouseLeave={onLeave}
+        onTouchMove={onTouch}
+        onTouchEnd={onLeave}
       >
-        <motion.div className="auth-logo" variants={itemVariants} whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
-          <img src={logoHub} alt="LeRelais" style={{ width: '84px', height: '84px', borderRadius: '22px', objectFit: 'cover', boxShadow: '0 10px 30px rgba(0,0,0,0.3)' }} />
-        </motion.div>
+        {/* Moving light refraction */}
+        <div className="lx-light" style={{
+          background: `radial-gradient(ellipse 220px 180px at ${light.x}% ${light.y}%, rgba(210,178,120,0.13) 0%, transparent 70%)`,
+          opacity: light.show ? 1 : 0,
+          transition: 'opacity 0.3s',
+        }} />
 
-        <motion.h1 variants={itemVariants}>LeRelais</motion.h1>
-        <motion.p className="auth-subtitle" variants={itemVariants}>Toutes vos messageries. Un seul endroit.</motion.p>
+        {/* Gold border shimmer — top edge */}
+        <div className="lx-edge" />
 
-        <motion.div className="auth-tabs" variants={itemVariants}>
-          <button className={mode === 'login' ? 'active' : ''} onClick={() => setMode('login')}>Connexion</button>
-          <button className={mode === 'register' ? 'active' : ''} onClick={() => setMode('register')}>Créer un compte</button>
-        </motion.div>
+        {/* Logo */}
+        <div className="lx-logo-wrap">
+          <img src={logoHub} alt="Le Relais" className="lx-logo-img" />
+          <div className="lx-logo-ring" />
+        </div>
 
-        <motion.form onSubmit={submit} className="auth-form" variants={itemVariants}>
+        {/* Brand */}
+        <div className="lx-brand">
+          <h1 className="lx-name">Le Relais</h1>
+          <p className="lx-tagline">Toutes vos messageries — un seul endroit</p>
+        </div>
+
+        {/* Ornamental divider */}
+        <div className="lx-divider">
+          <span /><svg width="10" height="10" viewBox="0 0 10 10"><polygon points="5,0 10,5 5,10 0,5" fill="currentColor"/></svg><span />
+        </div>
+
+        {/* Mode tabs */}
+        <div className="lx-tabs">
+          <button className={mode === 'login' ? 'lx-tab active' : 'lx-tab'} onClick={() => { setMode('login'); setError(''); }}>
+            Connexion
+          </button>
+          <button className={mode === 'register' ? 'lx-tab active' : 'lx-tab'} onClick={() => { setMode('register'); setError(''); }}>
+            Inscription
+          </button>
+        </div>
+
+        {/* Form */}
+        <form onSubmit={submit} className="lx-form">
           {mode === 'register' && (
-            <div className="auth-input-wrap">
-              <User size={18} />
-              <input placeholder="Prénom" value={name} onChange={e => setName(e.target.value)} />
+            <div className="lx-field">
+              <label className="lx-label">Prénom</label>
+              <input className="lx-input" placeholder="Votre prénom" value={name} onChange={e => setName(e.target.value)} />
             </div>
           )}
-          <div className="auth-input-wrap">
-            <Mail size={18} />
-            <input type="text" placeholder="Identifiant" value={username} onChange={e => setUsername(e.target.value)} required />
+          <div className="lx-field">
+            <label className="lx-label">Identifiant</label>
+            <input className="lx-input" type="text" placeholder="Votre identifiant" value={username} onChange={e => setUsername(e.target.value)} required autoComplete="username" />
           </div>
-          <div className="auth-input-wrap">
-            <Lock size={18} />
-            <input type="password" placeholder="Mot de passe" value={password} onChange={e => setPass(e.target.value)} required />
+          <div className="lx-field">
+            <label className="lx-label">Mot de passe</label>
+            <input className="lx-input" type="password" placeholder="••••••••" value={password} onChange={e => setPass(e.target.value)} required autoComplete="current-password" />
           </div>
-          {error && <p className="auth-error">{error}</p>}
-          <button type="submit" className="auth-btn" disabled={loading}>
-            {loading ? <Loader2 className="spinner" size={20} /> : mode === 'login' ? 'Se connecter' : 'Créer mon compte'}
-          </button>
-        </motion.form>
 
-        <motion.p className="auth-platforms" variants={itemVariants}>
-          WhatsApp • Instagram • Telegram • Signal
-        </motion.p>
-      </motion.div>
+          {error && <p className="lx-error">{error}</p>}
+
+          <button type="submit" className="lx-btn" disabled={loading}>
+            <span className="lx-btn-shimmer" />
+            <span className="lx-btn-label">
+              {loading
+                ? <Loader2 size={18} className="spinner" />
+                : mode === 'login' ? 'Se connecter' : 'Créer mon compte'}
+            </span>
+          </button>
+        </form>
+
+        {/* Platforms */}
+        <p className="lx-platforms">
+          WhatsApp&nbsp;&nbsp;·&nbsp;&nbsp;Instagram&nbsp;&nbsp;·&nbsp;&nbsp;Telegram&nbsp;&nbsp;·&nbsp;&nbsp;Signal
+        </p>
+      </div>
     </div>
   );
 }
@@ -209,12 +259,30 @@ export default function App() {
     await sendMediaBlob(blob, 'audio.ogg', 'audio/ogg');
   });
 
-  // ── Check auth ───────────────────────────────────────────────
+  // ── Check auth — avec retry pour les démarrages lents ──────────
   useEffect(() => {
     if (!getToken()) { setAuthReady(true); return; }
-    axios.get(`${API}/auth/me`)
-      .then(r => { setUser(r.data); setAuthReady(true); })
-      .catch(() => { clearToken(); setAuthReady(true); });
+
+    const tryAuth = async (attempt = 1) => {
+      try {
+        const r = await axios.get(`${API}/auth/me`);
+        setUser(r.data);
+        setAuthReady(true);
+      } catch (err) {
+        // Si le serveur démarre encore (502/503/504), on réessaie jusqu'à 5 fois
+        if (attempt < 5 && (!err.response || [502, 503, 504].includes(err.response.status))) {
+          setTimeout(() => tryAuth(attempt + 1), 2000 * attempt);
+        } else if (err.response?.status === 401) {
+          // Token invalide (JWT_SECRET changé) → on efface proprement
+          clearToken();
+          setAuthReady(true);
+        } else {
+          setAuthReady(true);
+        }
+      }
+    };
+
+    tryAuth();
   }, []);
 
   // ── Resize ───────────────────────────────────────────────────
@@ -272,9 +340,14 @@ export default function App() {
         axios.get(`${API}/contacts`),
         axios.get(`${API}/accounts`)
       ]);
-      setConversations(c.data); setContacts(ct.data); setAccounts(ac.data);
-    } catch (e) { console.error(e); }
-    finally { setLoading(false); }
+      // Ne mettre à jour que si on a des données réelles (évite de vider l'UI sur erreur transitoire)
+      if (Array.isArray(c.data))  setConversations(c.data);
+      if (Array.isArray(ct.data)) setContacts(ct.data);
+      if (Array.isArray(ac.data)) setAccounts(ac.data);
+    } catch (e) {
+      // Ne pas vider les données si c'est une erreur réseau passagère
+      if (e.response?.status !== 401) console.warn('[preload] Erreur transitoire, données conservées');
+    } finally { setLoading(false); }
   };
 
   const fetchMessages = async (cid) => {

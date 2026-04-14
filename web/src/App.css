@@ -1,3 +1,5 @@
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;1,300;1,400&family=Inter:wght@300;400;500;600&display=swap');
+
 :root {
   --bg: #040506;
   --bg-sidebar: rgba(12, 13, 14, 0.7);
@@ -459,36 +461,346 @@ body, html, #root {
   }
 }
 
-/* ─── AUTH SCREEN ─────────────────────────────────────────── */
-.auth-screen { 
-  height: 100vh; 
-  display: flex; 
-  align-items: center; 
-  justify-content: center; 
+/* ═══════════════════════════════════════════════════════════
+   LUXURY AUTH — Le Relais Premium Identity
+   ═══════════════════════════════════════════════════════════ */
+
+/* Typographie premium */
+.lx-name, .lx-label { font-family: 'Cormorant Garamond', Georgia, serif; }
+
+/* Fond plein écran */
+.lx-screen {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   background-size: cover;
   background-position: center;
-  background-repeat: no-repeat;
-  position: relative;
-  padding: 20px;
   overflow: hidden;
-  transition: background-image 0.5s ease;
+  padding: 20px;
 }
 
-.mouse-glow {
-  position: fixed;
+/* Voile atmosphérique — superpose une teinte sombre riche */
+.lx-atmo {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 80% 70% at 50% 30%, rgba(14, 10, 6, 0.55) 0%, rgba(4, 3, 2, 0.88) 100%);
+  backdrop-filter: blur(3px) saturate(110%);
+  z-index: 1;
+}
+
+/* Grain de luxe (texture filmique) */
+.lx-grain {
+  position: absolute;
+  inset: -50%;
+  width: 200%;
+  height: 200%;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='1'/%3E%3C/svg%3E");
+  opacity: 0.035;
+  pointer-events: none;
+  z-index: 2;
+  animation: grain-drift 8s steps(12) infinite;
+}
+@keyframes grain-drift {
+  0%,100% { transform: translate(0, 0); }
+  10%  { transform: translate(-3%,-4%); }
+  30%  { transform: translate(4%, 3%); }
+  50%  { transform: translate(-2%, 5%); }
+  70%  { transform: translate(3%,-2%); }
+  90%  { transform: translate(-4%, 1%); }
+}
+
+/* ─── LA CARTE 3D ─────────────────────────────────────────── */
+.lx-card {
+  position: relative;
+  z-index: 10;
+  width: 100%;
+  max-width: 410px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 22px;
+  padding: 52px 44px 40px;
+  border-radius: 28px;
+  background:
+    linear-gradient(160deg, rgba(22, 18, 12, 0.96) 0%, rgba(10, 8, 6, 0.98) 100%);
+  border: 1px solid rgba(210, 178, 120, 0.18);
+  box-shadow:
+    0 0 0 1px rgba(0,0,0,0.6),
+    0 40px 80px rgba(0, 0, 0, 0.75),
+    0 8px 20px rgba(0, 0, 0, 0.5),
+    inset 0 1px 0 rgba(210, 178, 120, 0.12);
+  transform-style: preserve-3d;
+  will-change: transform;
+  transition: opacity 0.6s cubic-bezier(0.23, 1, 0.32, 1),
+              translate 0.6s cubic-bezier(0.23, 1, 0.32, 1);
+  overflow: hidden;
+  cursor: default;
+}
+
+/* Réfraction lumineuse (suit la souris) */
+.lx-light {
+  position: absolute;
   inset: 0;
   pointer-events: none;
   z-index: 1;
-  background: radial-gradient(600px circle at var(--x) var(--y), rgba(99, 102, 241, 0.15), transparent 80%);
+  border-radius: inherit;
 }
 
-.auth-screen::before {
+/* Bordure dorée supérieure — signature premium */
+.lx-edge {
+  position: absolute;
+  top: 0; left: 10%; right: 10%;
+  height: 1px;
+  background: linear-gradient(90deg,
+    transparent 0%,
+    rgba(210, 178, 120, 0.6) 30%,
+    rgba(240, 210, 150, 0.9) 50%,
+    rgba(210, 178, 120, 0.6) 70%,
+    transparent 100%);
+  z-index: 2;
+}
+
+/* ─── LOGO ─────────────────────────────────────────────────── */
+.lx-logo-wrap {
+  position: relative;
+  z-index: 3;
+}
+
+.lx-logo-img {
+  width: 80px;
+  height: 80px;
+  border-radius: 20px;
+  object-fit: cover;
+  display: block;
+  box-shadow:
+    0 12px 32px rgba(0, 0, 0, 0.6),
+    0 0 0 1px rgba(210, 178, 120, 0.25);
+}
+
+.lx-logo-ring {
+  position: absolute;
+  inset: -4px;
+  border-radius: 24px;
+  border: 1px solid rgba(210, 178, 120, 0.2);
+  pointer-events: none;
+}
+
+/* ─── BRAND ─────────────────────────────────────────────────── */
+.lx-brand {
+  text-align: center;
+  z-index: 3;
+  margin-top: -4px;
+}
+
+.lx-name {
+  font-size: 38px;
+  font-weight: 400;
+  letter-spacing: 3px;
+  color: #F2E8D5;
+  line-height: 1;
+  text-transform: uppercase;
+  font-style: italic;
+}
+
+.lx-tagline {
+  font-family: 'Inter', sans-serif;
+  font-size: 11px;
+  font-weight: 300;
+  letter-spacing: 2.5px;
+  text-transform: uppercase;
+  color: rgba(185, 158, 100, 0.75);
+  margin-top: 8px;
+}
+
+/* ─── DIVISEUR ORNEMENTAL ──────────────────────────────────── */
+.lx-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  color: rgba(185, 158, 100, 0.45);
+  font-size: 7px;
+  z-index: 3;
+  margin: -4px 0;
+}
+.lx-divider span:not(svg) {
+  display: block;
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(185, 158, 100, 0.35), transparent);
+}
+.lx-divider svg { flex-shrink: 0; }
+
+/* ─── TABS ─────────────────────────────────────────────────── */
+.lx-tabs {
+  display: flex;
+  width: 100%;
+  gap: 0;
+  z-index: 3;
+  border-bottom: 1px solid rgba(185, 158, 100, 0.15);
+}
+
+.lx-tab {
+  flex: 1;
+  background: transparent;
+  border: none;
+  padding: 10px 4px;
+  font-family: 'Inter', sans-serif;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: rgba(185, 158, 100, 0.45);
+  cursor: pointer;
+  position: relative;
+  transition: color 0.3s;
+}
+
+.lx-tab::after {
   content: '';
   position: absolute;
-  inset: 0;
-  background: radial-gradient(circle at center, rgba(0,0,0,0.3) 0%, rgba(0,0,0,0.8) 100%);
-  backdrop-filter: blur(2px);
+  bottom: -1px; left: 20%; right: 20%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, #C9A96E, transparent);
+  transform: scaleX(0);
+  transition: transform 0.4s cubic-bezier(0.23, 1, 0.32, 1);
 }
+
+.lx-tab.active { color: #D4AF7A; }
+.lx-tab.active::after { transform: scaleX(1); }
+
+/* ─── FORMULAIRE ───────────────────────────────────────────── */
+.lx-form {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  z-index: 3;
+  margin-top: 4px;
+}
+
+.lx-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.lx-label {
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: rgba(185, 158, 100, 0.6);
+}
+
+.lx-input {
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid rgba(185, 158, 100, 0.25);
+  padding: 10px 0;
+  font-family: 'Inter', sans-serif;
+  font-size: 15px;
+  font-weight: 300;
+  color: #F2E8D5;
+  outline: none;
+  width: 100%;
+  transition: border-color 0.3s;
+  letter-spacing: 0.3px;
+}
+
+.lx-input::placeholder { color: rgba(185, 158, 100, 0.3); }
+
+.lx-input:focus {
+  border-bottom-color: rgba(212, 175, 122, 0.7);
+}
+
+/* ─── ERREUR ───────────────────────────────────────────────── */
+.lx-error {
+  font-family: 'Inter', sans-serif;
+  font-size: 12px;
+  color: #c0796e;
+  letter-spacing: 0.5px;
+  text-align: center;
+  margin: -8px 0;
+}
+
+/* ─── BOUTON PRINCIPAL ─────────────────────────────────────── */
+.lx-btn {
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+  padding: 16px;
+  border: none;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #1a1408 0%, #2a1f0e 50%, #1a1408 100%);
+  border: 1px solid rgba(185, 158, 100, 0.35);
+  cursor: pointer;
+  margin-top: 8px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(210, 178, 120, 0.1);
+  transition: border-color 0.3s, box-shadow 0.3s, transform 0.2s;
+}
+
+.lx-btn:hover {
+  border-color: rgba(185, 158, 100, 0.6);
+  box-shadow: 0 6px 28px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(210, 178, 120, 0.2);
+  transform: translateY(-1px);
+}
+
+.lx-btn:active { transform: translateY(0); }
+.lx-btn:disabled { opacity: 0.45; cursor: default; transform: none; }
+
+/* Shimmer doré qui traverse le bouton au hover */
+.lx-btn-shimmer {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(105deg,
+    transparent 30%,
+    rgba(210, 178, 120, 0.18) 48%,
+    rgba(240, 210, 150, 0.22) 52%,
+    transparent 70%);
+  transform: translateX(-100%);
+  transition: transform 0s;
+}
+.lx-btn:hover .lx-btn-shimmer {
+  transform: translateX(100%);
+  transition: transform 0.55s cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.lx-btn-label {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-family: 'Inter', sans-serif;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 2.5px;
+  text-transform: uppercase;
+  color: #C9A96E;
+}
+
+/* ─── PLATFORMS ────────────────────────────────────────────── */
+.lx-platforms {
+  font-family: 'Inter', sans-serif;
+  font-size: 10px;
+  font-weight: 300;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: rgba(185, 158, 100, 0.3);
+  text-align: center;
+  z-index: 3;
+  margin-top: -4px;
+}
+
+/* Conserver les anciennes classes pour compatibilité */
+.auth-screen { display: none; }
+.mouse-glow  { display: none; }
+.auth-screen::before { display: none; }
 
 .auth-card { 
   width: 100%; 
