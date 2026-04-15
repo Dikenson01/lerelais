@@ -182,8 +182,10 @@ export default function App() {
   }, [conversations, view, searchQuery]);
 
   const getAvatar = (conv) => {
+    if (!conv) return null;
     const c = Array.isArray(conv.contacts) ? conv.contacts[0] : conv.contacts;
-    return c?.avatar_url || null;
+    const url = c?.photo_url || c?.avatar_url || conv.metadata?.photo_url || conv.metadata?.avatar_url;
+    return url || null;
   };
 
   const getDisplayName = (conv) => {
@@ -223,7 +225,14 @@ export default function App() {
            {sortedConvs.map(conv => (
              <div key={conv.id} className={`conv-card ${selectedConv?.id===conv.id?'active':''}`} onClick={()=>setSelectedConv(conv)}>
                 <div className="avatar-wrap">
-                  {getAvatar(conv) ? <img src={getAvatar(conv)} alt=""/> : <div className="avatar-placeholder"/>}
+                  {getAvatar(conv) ? (
+                    <img 
+                      src={getAvatar(conv)} 
+                      alt="" 
+                      onError={(e) => e.target.style.display = 'none'} 
+                    />
+                  ) : null}
+                  <div className="avatar-placeholder"/>
                   <div className="platform-dot whatsapp"/>
                 </div>
                 <div className="conv-content">
@@ -245,7 +254,10 @@ export default function App() {
             <header className="chat-header">
               {isMobile && <button onClick={()=>setSelectedConv(null)}><ArrowLeft/></button>}
               <div className="avatar-wrap" style={{width:40, height:40}}>
-                {getAvatar(selectedConv) ? <img src={getAvatar(selectedConv)} alt=""/> : <div className="avatar-placeholder"/>}
+                {getAvatar(selectedConv) ? (
+                  <img src={getAvatar(selectedConv)} alt="" onError={(e) => e.target.style.display = 'none'} />
+                ) : null}
+                <div className="avatar-placeholder" />
               </div>
               <div className="header-info">
                 <h2>{getDisplayName(selectedConv)}</h2>
