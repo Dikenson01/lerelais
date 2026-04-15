@@ -727,19 +727,22 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
 
             if (convId) {
               const content = extractContent(msg.message);
+              const isGroupMsg = jid.endsWith('@g.us');
+              const finalSenderId = msg.key.fromMe ? accountId : (isGroupMsg ? (msg.key.participant || jid) : jid);
+
               // FIX 1 & 3: Ne plus ignorer les doublons pour pouvoir patcher les previews
               const { data: inserted } = await supabase.from('messages').upsert({
                 conversation_id: convId,
                 account_id: accountId,
                 remote_id: msg.key.id,
-                sender_id: msg.key.fromMe ? accountId : (msg.key.participant || jid),
+                sender_id: finalSenderId,
                 content: content || (mediaInfo ? `[${mediaInfo.type}]` : ''),
                 media_type: mediaInfo?.type || null,
                 is_from_me: msg.key.fromMe || false,
                 timestamp: new Date(ts || Date.now()),
                 metadata: {
                   has_media: !!mediaInfo,
-                  participant: msg.key.participant || null,
+                  participant: isGroupMsg ? (msg.key.participant || null) : null,
                   pushName: msg.pushName || null
                 }
               }, { onConflict: 'remote_id' }).select('id').maybeSingle();

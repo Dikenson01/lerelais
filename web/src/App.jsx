@@ -211,24 +211,25 @@ export default function App() {
   };
 
   // Resolve sender ID to display name using contacts list
-  const resolveContactName = useCallback((senderId) => {
-    if (!senderId) return 'Inconnu';
+  const resolveContactName = useCallback((senderId, participantId = null) => {
+    const idToSearch = participantId || senderId;
+    if (!idToSearch) return 'Inconnu';
     
     // 1. Direct match
-    let contact = contacts.find(c => c.external_id === senderId);
+    let contact = contacts.find(c => c.external_id === idToSearch);
     
     // 2. ID-only match (handle s.whatsapp.net vs lid)
     if (!contact) {
-      const pureId = senderId.split('@')[0];
+      const pureId = idToSearch.split('@')[0];
       contact = contacts.find(c => c.external_id?.startsWith(pureId));
     }
 
     if (contact?.display_name) return contact.display_name;
     
     // Fallback: extract phone number from JID
-    const phone = senderId.split('@')[0];
+    const phone = idToSearch.split('@')[0];
     if (phone && phone.length > 5) return `+${phone}`;
-    return senderId;
+    return idToSearch;
   }, [contacts]);
 
   const startCall = (conv) => {
@@ -322,7 +323,7 @@ export default function App() {
                 <div key={msg.id} className={`msg-bubble ${msg.is_from_me?'me':'them'}`}>
                   {/* Sender name for group chats */}
                   {selectedConv?.is_group && !msg.is_from_me && (
-                    <div className="msg-sender">{msg.metadata?.pushName || resolveContactName(msg.sender_id)}</div>
+                    <div className="msg-sender">{msg.metadata?.pushName || resolveContactName(msg.sender_id, msg.metadata?.participant)}</div>
                   )}
                   {msg.metadata?.quoted && (
                     <div className="quoted-box">
