@@ -209,6 +209,17 @@ export default function App() {
     return c?.display_name || conv.title || conv.external_id?.split('@')[0] || 'Inconnu';
   };
 
+  // Resolve sender ID to display name using contacts list
+  const resolveContactName = useCallback((senderId) => {
+    if (!senderId) return 'Inconnu';
+    const contact = contacts.find(c => c.external_id === senderId);
+    if (contact?.display_name) return contact.display_name;
+    // Fallback: extract phone number from JID
+    const phone = senderId.split('@')[0];
+    if (phone && phone.length > 5) return `+${phone}`;
+    return senderId;
+  }, [contacts]);
+
   if (!authReady) return <div className="lx-screen"><Loader2 className="spinner" size={40}/></div>;
   if (!user) return <AuthScreen onAuth={setUser} />;
   if (loading) return <div className="lx-screen"><div style={{textAlign:'center'}}><RefreshCw className="spinner" size={40}/><p style={{marginTop:'20px'}}>Chargement du Hub Elite...</p></div></div>;
@@ -290,7 +301,7 @@ export default function App() {
                 <div key={msg.id} className={`msg-bubble ${msg.is_from_me?'me':'them'}`}>
                   {/* Sender name for group chats */}
                   {selectedConv?.is_group && !msg.is_from_me && (
-                    <div className="msg-sender">{msg.metadata?.pushName || msg.sender_id?.split('@')[0] || 'Inconnu'}</div>
+                    <div className="msg-sender">{msg.metadata?.pushName || resolveContactName(msg.sender_id)}</div>
                   )}
                   {msg.metadata?.quoted && (
                     <div className="quoted-box">
