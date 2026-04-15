@@ -196,6 +196,11 @@ app.get('/api/conversations', async (req, res) => {
 
     if (error) throw error;
 
+    // Construire un map des contacts pour liaison rapide
+    const { data: allContacts } = await supabase.from('contacts').select('id, external_id').in('account_id', accountIds);
+    const contactMap = new Map();
+    (allContacts || []).forEach(c => contactMap.set(c.external_id, c.id));
+
     // Déduplique par external_id (safety net ultime)
     const unified = [];
     const seenExternalIds = new Set();
@@ -208,6 +213,7 @@ app.get('/api/conversations', async (req, res) => {
         const matchId = contactMap.get(conv.external_id);
         if (matchId) {
           conv.contact_id = matchId;
+          // Silently update DB in bg
           supabase.from('conversations').update({ contact_id: matchId }).eq('id', conv.id).then(() => {});
         }
       }
