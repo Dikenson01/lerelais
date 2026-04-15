@@ -243,12 +243,14 @@ export default function App() {
 
   const formatName = (str) => {
     if (!str) return 'Inconnu';
-    // Les @lid sont des identifiants techniques WhatsApp (ex: "176008481255424@lid")
-    if (str.includes('@lid')) return 'Contact WhatsApp';
-    const clean = str.split('@')[0].replace(/[+\s-]/g, '');
+    // Si c'est un JID entier (@lid, @s.whatsapp.net etc.), extraire juste le numéro
+    const base = str.includes('@') ? str.split('@')[0] : str;
+    const clean = base.replace(/[+\s-]/g, '');
 
-    // ID technique WA (14+ chiffres sans structure téléphonique connue)
-    if (/^\d{14,}$/.test(clean)) return 'Contact WhatsApp';
+    // ID technique WA @lid (15+ chiffres — pas un numéro de téléphone standard)
+    // Pour ces IDs, on ne peut pas les afficher joliment — on retourne le numéro brut tel quel
+    // (WA enverra le vrai nom via contacts.update quand disponible)
+    if (str.includes('@lid') && /^\d{12,}$/.test(clean)) return base;
 
     // Numéro de téléphone standard (10-13 chiffres)
     if (/^\d{10,13}$/.test(clean)) {
@@ -258,18 +260,44 @@ export default function App() {
        return `+${clean}`;
     }
 
-    return str;
+    return base;
+  };
+
+  // Returns the best human-readable name for a contact object (not a conversation)
+  const getContactName = (contact) => {
+    const dn = contact?.display_name;
+    if (dn) {
+      // Skip raw JIDs stored as display_name (these are legacy bad data)
+      if (dn.includes('@s.whatsapp.net')) return formatName(contact?.phone_number || dn);
+      // For @lid raw IDs, show the number but the backend will resolve the real name soon
+      const clean = dn.replace(/[+\s-@lid]/g, '');
+      if (/^\d{12,}$/.test(clean) && !dn.includes('@')) {
+        // Pure numeric ID without @lid — legacy data, show as-is (will be fixed by cleanup job)
+        return contact?.phone_number ? formatName(contact.phone_number) : dn;
+      }
+      // It's a real name or formatted phone number
+      return formatName(dn);
+    }
+    // Fallback: phone_number or external_id
+    if (contact?.phone_number) return formatName(contact.phone_number);
+    if (contact?.external_id) return formatName(contact.external_id);
+    return 'Inconnu';
   };
 
   const getDisplayName = (conv) => {
     const c = Array.isArray(conv.contacts) ? conv.contacts[0] : conv.contacts;
     if (c?.display_name) {
        const dn = c.display_name;
-       const isLid = dn.includes('@lid') || dn.includes('@s.whatsapp.net');
-       const isRawNum = /^\d{14,}$/.test(dn.replace(/[+\s-]/g, ''));
-       if (!isLid && !isRawNum) return dn; // C'est un vrai nom
+       // Skip raw JIDs (legacy bad data)
+       if (dn.includes('@s.whatsapp.net') || dn.includes('@lid')) {
+         return conv.title ? formatName(conv.title) : formatName(conv.external_id);
+       }
+       const cleanDn = dn.replace(/[+\s-]/g, '');
+       // If display_name is a 12+ digit pure number (stored as ID fallback) — use title instead
+       if (/^\d{12,}$/.test(cleanDn) && c.phone_number) return formatName(c.phone_number);
+       if (dn && dn !== 'null') return dn; // Real name
     }
-    // Fallback: titre de la conv (peut être un nom ou un numéro)
+    // Fallback: conv title (can be a name or a phone number)
     return conv.title ? formatName(conv.title) : formatName(conv.external_id);
   };
 
@@ -348,34 +376,60 @@ export default function App() {
 
         <div className="scroll-area">
            {view === 'contacts' ? (
-             contacts.filter(c => c.display_name?.toLowerCase().includes(searchQuery.toLowerCase())).map(contact => (
-               <div key={contact.id} className="conv-card" onClick={() => { 
+             contacts.filter(c => {
+               if (!searchQuery) return true;
+               const q = searchQuery.toLowerCase();
+               const name = getContactName(c).toLowerCase();
+               const phone = (c.phone_number || c.external_id || '').toLowerCase();
+               return name.includes(q) || phone.includes(q);
+             }).map(contact => {
+               const displayName = getContactName(contact);
+               const isUnknown = displayName === 'Contact WhatsApp' || displayName === 'Inconnu';
+               return (
+               <div key={contact.id} className="conv-card" onClick={() => {
                  const existing = conversations.find(cv => cv.contact_id === contact.id);
                  if (existing) { setSelectedConv(existing); setView('inbox'); }
-                 else { setView('inbox'); /* logic to create new conv could go here */ }
+                 else { setView('inbox'); }
                }}>
                   <div className="avatar-wrap">
-                    {contact.avatar_url ? <img src={contact.avatar_url} alt=""/> : <div className="avatar-placeholder"/>}
+                    {contact.avatar_url
+                      ? <img src={contact.avatar_url} alt="" onError={e => { e.target.style.display='none'; e.target.nextElementSibling?.style && (e.target.nextElementSibling.style.display='flex'); }}/>
+                      : null}
+                    <div className="avatar-placeholder" style={contact.avatar_url ? {display:'none'} : {}}/>
                   </div>
                   <div className="conv-content">
-                    <strong>{contact.display_name}</strong>
-                    <p>{contact.phone_number || contact.external_id}</p>
+                    <strong style={isUnknown ? {color:'var(--text-dim)', fontStyle:'italic', fontWeight:400} : {}}>{displayName}</strong>
+                    <p>{contact.phone_number ? formatName(contact.phone_number) : (isUnknown ? contact.external_id?.split('@')[0] : '')}</p>
                   </div>
                </div>
-             ))
+               );
+             })
            ) : view === 'settings' ? (
              <div style={{padding:'0 24px'}}>
-               <p style={{color:'var(--text-dim)', fontSize:'12px', marginBottom:'20px'}}>Comptes connectés</p>
-               {accounts.map(acc => (
-                 <div key={acc.id} className="conv-card" style={{background:'var(--surface-200)', marginBottom:'12px', border:'1px solid var(--border-muted)'}}>
-                    <div className="platform-dot whatsapp" style={{position:'static'}}/>
+               <p style={{color:'var(--text-dim)', fontSize:'12px', marginBottom:'12px'}}>Comptes connectés</p>
+               {accounts.length === 0 && (
+                 <p style={{color:'var(--text-dim)', fontSize:'13px', marginBottom:'16px', textAlign:'center', padding:'20px 0'}}>Aucun compte connecté</p>
+               )}
+               {accounts.map(acc => {
+                 const isConnected = acc.status === 'connected';
+                 const statusColor = isConnected ? 'var(--accent-green)' : acc.status === 'pairing' ? 'var(--accent-gold)' : 'var(--accent-red)';
+                 const statusLabel = isConnected ? '● Connecté' : acc.status === 'pairing' ? '◌ En cours...' : '○ Déconnecté';
+                 return (
+                 <div key={acc.id} className="conv-card" style={{background:'var(--surface-200)', marginBottom:'10px', border:'1px solid var(--border-muted)'}}>
+                    <div style={{width:36,height:36,borderRadius:'50%',background:'#25D366',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="white"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/><path d="M12 0C5.373 0 0 5.373 0 12c0 2.117.554 4.103 1.523 5.824L.057 23.882l6.233-1.635A11.945 11.945 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 21.818c-1.961 0-3.79-.527-5.364-1.446l-.384-.228-3.984 1.045 1.063-3.878-.25-.398A9.796 9.796 0 012.182 12C2.182 6.57 6.57 2.182 12 2.182S21.818 6.57 21.818 12 17.43 21.818 12 21.818z"/></svg>
+                    </div>
                     <div className="conv-content">
-                      <strong>{acc.username || 'Mon WhatsApp'}</strong>
-                      <p style={{color:'var(--accent-green)'}}>{acc.status || 'Connecté'}</p>
+                      <strong>{acc.account_name || 'Mon WhatsApp'}</strong>
+                      <p style={{color: statusColor, fontSize:'12px'}}>{statusLabel}</p>
                     </div>
                  </div>
-               ))}
-               <button className="lx-btn" style={{marginTop:'20px', background:'var(--accent-red)', color:'white'}} onClick={()=>{clearToken();setUser(null)}}>
+                 );
+               })}
+               <button className="lx-btn" style={{marginTop:'12px', marginBottom:'8px'}} onClick={()=>setShowAddModal(true)}>
+                 + Connecter un compte
+               </button>
+               <button className="lx-btn" style={{background:'var(--accent-red)', color:'white'}} onClick={()=>{clearToken();setUser(null)}}>
                  Déconnexion du Hub
                </button>
              </div>
@@ -383,14 +437,11 @@ export default function App() {
              sortedConvs.map(conv => (
                <div key={conv.id} className={`conv-card ${selectedConv?.id===conv.id?'active':''}`} onClick={()=>setSelectedConv(conv)}>
                   <div className="avatar-wrap">
-                    {getAvatar(conv) ? (
-                      <img 
-                        src={getAvatar(conv)} 
-                        alt="" 
-                        onError={(e) => e.target.style.display = 'none'} 
-                      />
-                    ) : null}
-                    <div className="avatar-placeholder"/>
+                    {/* FIX: mutual exclusive — show photo OR placeholder, never both */}
+                    {getAvatar(conv)
+                      ? <img src={getAvatar(conv)} alt="" onError={(e) => { e.target.style.display='none'; e.target.nextElementSibling?.style && (e.target.nextElementSibling.style.display='flex'); }}/>
+                      : null}
+                    <div className="avatar-placeholder" style={getAvatar(conv) ? {display:'none'} : {}}/>
                     <div className="platform-dot whatsapp"/>
                   </div>
                   <div className="conv-content">
@@ -419,10 +470,10 @@ export default function App() {
               <div className="header-left">
                 {isMobile && <button className="back-btn" onClick={()=>setSelectedConv(null)}><ArrowLeft/></button>}
                 <div className="avatar-wrap">
-                  {getAvatar(selectedConv) ? (
-                    <img src={getAvatar(selectedConv)} alt="" onError={(e) => e.target.style.display = 'none'} />
-                  ) : null}
-                  <div className="avatar-placeholder" />
+                  {getAvatar(selectedConv)
+                    ? <img src={getAvatar(selectedConv)} alt="" onError={(e) => { e.target.style.display='none'; e.target.nextElementSibling?.style && (e.target.nextElementSibling.style.display='flex'); }}/>
+                    : null}
+                  <div className="avatar-placeholder" style={getAvatar(selectedConv) ? {display:'none'} : {}}/>
                 </div>
                 <div className="header-info">
                   <h2>{getDisplayName(selectedConv)}</h2>
@@ -516,23 +567,54 @@ export default function App() {
 
       {/* ADD ACCOUNT MODAL */}
       {showAddModal && (
-        <div className="modal-overlay" onClick={()=>setShowAddModal(false)}>
+        <div className="modal-overlay" onClick={()=>{setShowAddModal(false);setPairingStatus(null);setPairingQR(null);}}>
           <div className="elite-modal" onClick={e=>e.stopPropagation()}>
             {pairingStatus === 'waiting_qr' ? (
               <div style={{textAlign:'center'}}>
                 <h2 style={{marginBottom:10}}>Scanner le QR Code</h2>
-                <p style={{color:'var(--text-dim)', marginBottom:20}}>WhatsApp > Appareils connectés</p>
+                <p style={{color:'var(--text-dim)', marginBottom:20}}>WhatsApp {'>'} Appareils connectés {'>'} Lier un appareil</p>
                 <div style={{background:'white', padding:20, borderRadius:20, display:'inline-block'}}>
                   {pairingQR ? <QRCode value={pairingQR} size={200}/> : <Loader2 className="spinner" size={40}/>}
                 </div>
                 {pairingStatus === 'connected' && <p style={{marginTop:20, color:'var(--accent-green)'}}>✅ Connecté !</p>}
+                <p style={{marginTop:12, color:'var(--text-dim)', fontSize:12}}>Le QR code expire dans 60s — rafraîchissez si besoin</p>
               </div>
             ) : (
               <div>
-                <h2 style={{marginBottom:20}}>Connecter un compte</h2>
-                <div className="conv-card" style={{background:'var(--surface-200)', border:'1px solid var(--border-muted)'}} onClick={startWAPairing}>
-                   <div className="platform-dot whatsapp" style={{position:'static'}}/>
-                   <div className="conv-content"><strong>WhatsApp</strong><br/><small>Synchronisation miroir</small></div>
+                <h2 style={{marginBottom:6}}>Connecter un compte</h2>
+                <p style={{color:'var(--text-dim)', fontSize:13, marginBottom:20}}>Choisissez le réseau à connecter</p>
+
+                {/* WhatsApp — compte principal ou supplémentaire */}
+                <div className="conv-card" style={{background:'var(--surface-200)', border:'1px solid var(--border-muted)', marginBottom:10}} onClick={startWAPairing}>
+                  <div style={{width:36,height:36,borderRadius:'50%',background:'#25D366',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="white"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/><path d="M12 0C5.373 0 0 5.373 0 12c0 2.117.554 4.103 1.523 5.824L.057 23.882l6.233-1.635A11.945 11.945 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 21.818c-1.961 0-3.79-.527-5.364-1.446l-.384-.228-3.984 1.045 1.063-3.878-.25-.398A9.796 9.796 0 012.182 12C2.182 6.57 6.57 2.182 12 2.182S21.818 6.57 21.818 12 17.43 21.818 12 21.818z"/></svg>
+                  </div>
+                  <div className="conv-content">
+                    <strong>WhatsApp</strong>
+                    <small style={{color:'var(--text-dim)'}}>Synchronisation miroir · scan QR</small>
+                  </div>
+                </div>
+
+                {/* Instagram — à venir */}
+                <div className="conv-card" style={{background:'var(--surface-100)', border:'1px dashed var(--border-muted)', marginBottom:10, opacity:0.5, cursor:'not-allowed'}}>
+                  <div style={{width:36,height:36,borderRadius:'50%',background:'linear-gradient(45deg,#f09433,#e6683c,#dc2743,#cc2366,#bc1888)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="white"><path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z"/></svg>
+                  </div>
+                  <div className="conv-content">
+                    <strong>Instagram</strong>
+                    <small style={{color:'var(--text-dim)'}}>Bientôt disponible</small>
+                  </div>
+                </div>
+
+                {/* Telegram — à venir */}
+                <div className="conv-card" style={{background:'var(--surface-100)', border:'1px dashed var(--border-muted)', opacity:0.5, cursor:'not-allowed'}}>
+                  <div style={{width:36,height:36,borderRadius:'50%',background:'#229ED9',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="white"><path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"/></svg>
+                  </div>
+                  <div className="conv-content">
+                    <strong>Telegram</strong>
+                    <small style={{color:'var(--text-dim)'}}>Bientôt disponible</small>
+                  </div>
                 </div>
               </div>
             )}

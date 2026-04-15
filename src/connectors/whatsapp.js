@@ -336,18 +336,34 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
     }
   };
 
+  // Returns true if a string is a real name (not a raw JID / numeric ID fallback)
+  const isRealName = (str) => {
+    if (!str) return false;
+    if (str.includes('@')) return false; // raw JID
+    const clean = str.replace(/[+\s\-]/g, '');
+    if (/^\d{10,}$/.test(clean)) return false; // pure phone number / numeric ID
+    return true;
+  };
+
   const upsertContact = async (jid, name, lidValue = null) => {
     const phone = (!jid.endsWith('@lid') && !jid.endsWith('@g.us')) ? jid.split('@')[0] : null;
+    const hasRealName = isRealName(name);
 
-    // Upsert sans avatar_url pour ne pas écraser les photos existantes
-    const { data: contact } = await supabase.from('contacts').upsert({
+    // NEVER overwrite an existing real name with a numeric fallback ID.
+    // If we have a real name → update (ignoreDuplicates: false)
+    // If we only have a numeric/JID fallback → preserve existing value (ignoreDuplicates: true)
+    const upsertPayload = {
       account_id: accountId,
       external_id: jid,
-      display_name: name || jid.split('@')[0],
       phone_number: phone,
       metadata: { lid: lidValue }
-    }, { onConflict: 'account_id, external_id', ignoreDuplicates: false })
-    .select('id, avatar_url').single();
+    };
+    if (hasRealName) upsertPayload.display_name = name;
+
+    const { data: contact } = await supabase.from('contacts').upsert(upsertPayload, {
+      onConflict: 'account_id, external_id',
+      ignoreDuplicates: !hasRealName  // preserve existing name if we don't have a better one
+    }).select('id, avatar_url').single();
 
     // Fetch photo de profil si absente — stockage permanent dans Supabase Storage
     if (contact && !contact.avatar_url && _sock && !jid.endsWith('@lid') && !jid.endsWith('@g.us')) {
@@ -501,6 +517,33 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
         logger.info('[WA] Connected successfully!');
 
         setTimeout(async () => {
+          // 0. ONE-TIME DATA CLEANUP: reset @lid contacts whose display_name is just the numeric ID
+          // These were created with display_name = jid (bug fixed above) and show as raw numbers in UI.
+          // Setting display_name = null lets the UI show 'Contact WhatsApp' and allows contacts.update to fill real names.
+          try {
+            const { data: badContacts } = await supabase.from('contacts')
+              .select('id, external_id, display_name')
+              .eq('account_id', accountId)
+              .like('external_id', '%@lid');
+            if (badContacts?.length) {
+              const toReset = badContacts.filter(c => {
+                if (!c.display_name) return false;
+                // display_name is the raw JID or just the numeric part (e.g. "176008481255424" or "176008481255424@lid")
+                const clean = c.display_name.replace('@lid', '').replace(/[+\s-]/g, '');
+                return /^\d{12,}$/.test(clean);
+              });
+              if (toReset.length > 0) {
+                logger.info(`[WA-CLEANUP] Resetting ${toReset.length} @lid contacts with numeric display_name...`);
+                for (const c of toReset) {
+                  await supabase.from('contacts').update({ display_name: null }).eq('id', c.id);
+                }
+                logger.info('[WA-CLEANUP] @lid contact names reset. Will be filled by contacts.update events.');
+              }
+            }
+          } catch (e) {
+            logger.warn('[WA-CLEANUP] Could not clean up @lid contacts:', e.message);
+          }
+
           // 1. Lier les conversations orphelines à leurs contacts
           const { data: convs } = await supabase.from('conversations').select('id, title, external_id, contact_id').eq('account_id', accountId);
           if (convs) {
@@ -545,16 +588,25 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
                 }).eq('id', convId);
 
                 // SYNC PARTICIPANTS AS CONTACTS
+                // FIXED: for @lid contacts, never store the JID as display_name (shows as numeric ID in UI).
+                // Use real name from group participant data if available, otherwise leave null.
+                // contacts.update events will fill in the real name when WA sends it.
                 for (const p of group.participants) {
                   const jid = jidNormalizedUser(p.id);
                   if (jid.endsWith('@s.whatsapp.net') || jid.endsWith('@lid')) {
+                    const isLid = jid.endsWith('@lid');
                     const phone = jid.endsWith('@s.whatsapp.net') ? jid.split('@')[0] : null;
+                    // Use participant's real name if WA provides it, otherwise null (not the JID)
+                    const realName = p.name || p.notify || p.verifiedName || null;
+                    // For @s.whatsapp.net without a real name, fall back to phone number (readable)
+                    // For @lid without a real name, store null (UI will show 'Contact WhatsApp')
+                    const displayName = realName || (phone ? `+${phone}` : null);
                     await supabase.from('contacts').upsert({
                       account_id: accountId,
                       external_id: jid,
-                      display_name: phone || jid,
+                      ...(displayName ? { display_name: displayName } : {}),
                       phone_number: phone,
-                      metadata: { lid: jid.endsWith('@lid') ? jid : null }
+                      metadata: { lid: isLid ? jid : null }
                     }, { onConflict: 'account_id, external_id', ignoreDuplicates: true });
                   }
                 }
@@ -771,21 +823,30 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
         logger.info(`[WA] Full Sync: ${chats?.length || 0} chats, ${syncContacts?.length || 0} contacts, ${messages?.length || 0} messages`);
 
         // 1. Sync Contacts — avec résolution des noms
+        // FIXED: never overwrite a good existing name with a numeric ID fallback
         if (syncContacts) {
           for (const contact of syncContacts) {
             const jid = jidNormalizedUser(contact.id);
             const isLid = jid.endsWith('@lid');
             const isGroup = jid.endsWith('@g.us');
+            if (isGroup) continue; // groups are handled separately
             const phone = (!isLid && !isGroup) ? jid.split('@')[0] : null;
-            const name = contact.name || contact.verifiedName || contact.notify || jid.split('@')[0];
+            // Only use real names — never fall back to the JID number
+            const name = contact.name || contact.verifiedName || contact.notify || null;
+            const hasName = isRealName(name);
 
-            await supabase.from('contacts').upsert({
+            const payload = {
               account_id: accountId,
               external_id: jid,
-              display_name: name,
               phone_number: phone,
               metadata: { lid: isLid ? jid : null }
-            }, { onConflict: 'account_id, external_id', ignoreDuplicates: false });
+            };
+            if (hasName) payload.display_name = name;
+
+            await supabase.from('contacts').upsert(payload, {
+              onConflict: 'account_id, external_id',
+              ignoreDuplicates: !hasName // preserve existing name if WA didn't provide one
+            });
           }
         }
 
@@ -1009,14 +1070,60 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
           }).eq('account_id', accountId).eq('external_id', jid);
         }
 
-        // Mapping LID ↔ PN
+        // Mapping LID ↔ PN + cross-reference pour résoudre les noms
         if (update.lid || update.phoneNumber) {
-          await supabase.from('contacts').upsert({
-            account_id: accountId,
-            external_id: jid,
-            display_name: update.name || update.notify || jid.split('@')[0],
-            metadata: { lid: update.lid || null, pn: update.phoneNumber || null }
-          }, { onConflict: 'account_id, external_id' });
+          const newName = update.name || update.notify || null;
+          const hasNewName = isRealName(newName);
+
+          const metaPayload = { lid: update.lid || null, pn: update.phoneNumber || null };
+          const upsertData = { account_id: accountId, external_id: jid, metadata: metaPayload };
+          if (hasNewName) upsertData.display_name = newName;
+
+          await supabase.from('contacts').upsert(upsertData, {
+            onConflict: 'account_id, external_id',
+            ignoreDuplicates: !hasNewName
+          });
+
+          // CROSS-REFERENCE: si update.phoneNumber arrive pour un @lid,
+          // chercher le contact @s.whatsapp.net avec ce numéro et copier son nom vers le @lid
+          if (update.phoneNumber && jid.endsWith('@lid')) {
+            const phonejid = `${update.phoneNumber}@s.whatsapp.net`;
+            const { data: phoneContact } = await supabase.from('contacts')
+              .select('id, display_name, avatar_url')
+              .eq('account_id', accountId)
+              .eq('external_id', phonejid)
+              .maybeSingle();
+            if (phoneContact && isRealName(phoneContact.display_name)) {
+              logger.info(`[WA-LID] Resolved @lid ${jid} -> ${phoneContact.display_name} (via phone ${update.phoneNumber})`);
+              await supabase.from('contacts').update({
+                display_name: phoneContact.display_name,
+                phone_number: update.phoneNumber,
+                ...(phoneContact.avatar_url ? { avatar_url: phoneContact.avatar_url } : {})
+              }).eq('account_id', accountId).eq('external_id', jid);
+            }
+          }
+
+          // CROSS-REFERENCE inverse: si update.lid arrive pour un @s.whatsapp.net,
+          // mettre à jour le contact @lid correspondant avec le nom connu
+          if (update.lid && !jid.endsWith('@lid')) {
+            const lidJid = jidNormalizedUser(update.lid);
+            const { data: snContact } = await supabase.from('contacts')
+              .select('display_name, avatar_url, phone_number')
+              .eq('account_id', accountId)
+              .eq('external_id', jid)
+              .maybeSingle();
+            if (snContact && isRealName(snContact.display_name)) {
+              logger.info(`[WA-LID] Propagating name ${snContact.display_name} to @lid ${lidJid}`);
+              await supabase.from('contacts').upsert({
+                account_id: accountId,
+                external_id: lidJid,
+                display_name: snContact.display_name,
+                phone_number: snContact.phone_number,
+                metadata: { lid: lidJid },
+                ...(snContact.avatar_url ? { avatar_url: snContact.avatar_url } : {})
+              }, { onConflict: 'account_id, external_id', ignoreDuplicates: false });
+            }
+          }
         }
       }
     });

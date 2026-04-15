@@ -422,16 +422,19 @@ app.post('/api/conversations/:id/archive', async (req, res) => {
 
 app.post('/api/connect/whatsapp', async (req, res) => {
   try {
+    const forceNew = req.body?.forceNew === true; // Allow adding a second WA account
     const { data: userAccounts } = await supabase.from('accounts').select('id, status').eq('user_id', req.userId).eq('platform', 'whatsapp');
-    
-    // 1. Check if already connected via active connector
-    const existingActive = userAccounts?.find(a => activeConnectors[a.id]);
-    if (existingActive) return res.json({ accountId: existingActive.id });
 
-    // 2. Reuse EXISTING disconnected/pairing account if it exists
+    // 1. Check if already connected via active connector (skip if forceNew)
+    if (!forceNew) {
+      const existingActive = userAccounts?.find(a => activeConnectors[a.id]);
+      if (existingActive) return res.json({ accountId: existingActive.id });
+    }
+
+    // 2. Reuse EXISTING disconnected/pairing account if it exists (skip if forceNew)
     let accountId;
-    const reuseable = userAccounts?.[0]; // Grab the first one (should be unique by platform)
-    
+    const reuseable = !forceNew ? userAccounts?.[0] : null;
+
     if (reuseable) {
       accountId = reuseable.id;
       logger.info(`[WA-INIT] Reusing account ${accountId}. Total session wipe and reset for QR...`);
@@ -441,7 +444,7 @@ app.post('/api/connect/whatsapp', async (req, res) => {
       await supabase.from('accounts').update({ status: 'pairing' }).eq('id', accountId);
     } else {
       accountId = crypto.randomUUID();
-      logger.info(`[WA-INIT] Creating NEW account ID: ${accountId}`);
+      logger.info(`[WA-INIT] Creating NEW account ID: ${accountId}${forceNew ? ' (forceNew)' : ''}`);
       await supabase.from('accounts').insert({ id: accountId, user_id: req.userId, platform: 'whatsapp', status: 'pairing' });
     }
 
