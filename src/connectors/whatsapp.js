@@ -701,7 +701,7 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
               jidToConvId[jid] = convId;
               // Mettre à jour timestamp + état archivé
               const { data: existing } = await supabase.from('conversations').select('metadata').eq('id', convId).maybeSingle();
-              const isArchived = chat.archived === true || chat.archive === true;
+              const isArchived = chat.archived === true || chat.archive === true || chat.readOnly === true;
               await supabase.from('conversations')
                 .update({ 
                   metadata: { ...(existing?.metadata || {}), is_archived: isArchived },
@@ -999,7 +999,12 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
         logger.info(`[WA-CASCADE-SYNC] Fetching history for ${jid} (cursor: ${cursorMsgId || 'START'})`);
         
         // fetchMessageHistory est l'API Baileys pour remonter le temps
-        const messages = await sock.fetchMessageHistory(jid, limit, cursorMsgId ? { id: cursorMsgId, fromMe: false } : undefined);
+        // NOTE: Baileys peut rejeter si le cursor n'est pas formaté correctement
+        const messages = await sock.fetchMessageHistory(jid, limit, cursorMsgId ? { id: cursorMsgId, fromMe: false } : undefined)
+          .catch(e => {
+            logger.warn(`[WA-CASCADE-SYNC] Failed with cursor ${cursorMsgId}, retrying without cursor...`);
+            return sock.fetchMessageHistory(jid, limit);
+          });
 
         if (!messages || messages.length === 0) {
           logger.info(`[WA-CASCADE-SYNC] ${jid} finalized. No more history.`);
@@ -1054,10 +1059,11 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
       while (sock) {
         try {
           // Trouver les conversations qui ont besoin de sync
+          // Utilisation de NOT logic plus permissive pour attraper Metadata NULL ou flag manquant
           const { data: convs } = await supabase.from('conversations')
             .select('external_id, metadata')
             .eq('account_id', accountId)
-            .neq('metadata->history_sync_complete', true)
+            .or('metadata->history_sync_complete.is.null,metadata->history_sync_complete.eq.false')
             .order('last_message_at', { ascending: false })
             .limit(10);
 

@@ -22,7 +22,14 @@ axios.interceptors.request.use(cfg => {
   return cfg;
 });
 axios.interceptors.response.use(r => r, err => {
-  if (err.response?.status === 401) { clearToken(); window.location.reload(); }
+  if (err.response?.status === 401) { 
+    console.warn('Session expirée, redirection...');
+    clearToken(); 
+    if (!window.location.pathname.includes('/auth')) {
+       // Only reload if we are not already on the login flow or if we need to clear state
+       window.location.href = '/'; 
+    }
+  }
   return Promise.reject(err);
 });
 
@@ -314,20 +321,23 @@ export default function App() {
         {selectedConv ? (
           <div className="chat-content" style={{display:'flex', flexDirection:'column', height:'100%'}}>
             <header className="chat-header">
-              {isMobile && <button onClick={()=>setSelectedConv(null)}><ArrowLeft/></button>}
-              <div className="avatar-wrap" style={{width:40, height:40}}>
-                {getAvatar(selectedConv) ? (
-                  <img src={getAvatar(selectedConv)} alt="" onError={(e) => e.target.style.display = 'none'} />
-                ) : null}
-                <div className="avatar-placeholder" />
+              <div className="header-left">
+                {isMobile && <button className="back-btn" onClick={()=>setSelectedConv(null)}><ArrowLeft/></button>}
+                <div className="avatar-wrap">
+                  {getAvatar(selectedConv) ? (
+                    <img src={getAvatar(selectedConv)} alt="" onError={(e) => e.target.style.display = 'none'} />
+                  ) : null}
+                  <div className="avatar-placeholder" />
+                </div>
+                <div className="header-info">
+                  <h2>{getDisplayName(selectedConv)}</h2>
+                  <span className="status">WhatsApp • {selectedConv.is_group && selectedConv.group_metadata?.participants ? `${selectedConv.group_metadata.participants.length} participants` : 'En ligne'}</span>
+                </div>
               </div>
-              <div className="header-info">
-                <h2>{getDisplayName(selectedConv)}</h2>
-                <span className="status">WhatsApp • {selectedConv.is_group && selectedConv.group_metadata?.participants ? `${selectedConv.group_metadata.participants.length} participants` : 'En ligne'}</span>
-              </div>
-              <div style={{marginLeft:'auto', display:'flex', gap:'12px'}}>
-                <button className="nav-item" style={{width:36, height:36}} onClick={() => startCall(selectedConv)}><Phone size={18}/></button>
-                <button className="nav-item" style={{width:36, height:36}}><MoreVertical size={18}/></button>
+              <div className="header-actions">
+                <button className="h-action" onClick={() => startCall(selectedConv)} title="Appel"><Phone size={20}/></button>
+                <button className="h-action" onClick={() => preloadData()} title="Rafraîchir"><RefreshCw size={20}/></button>
+                <button className="h-action"><MoreVertical size={20}/></button>
               </div>
             </header>
 
