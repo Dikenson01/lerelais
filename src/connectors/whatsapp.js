@@ -481,6 +481,8 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
           logger.error('[WA] Logged out! Clearing session...');
           await clearSession();
           onEvent('status', { status: 'disconnected' });
+          // RESTART if we were in pairing phase to ensure QR is emitted
+          setTimeout(startSocket, 2000);
         } else if (statusCode === 440 || statusCode === 405) {
           logger.info('[WA-STABILITY] Conflict. Waiting 10s before retry...');
           setTimeout(startSocket, 10000);
