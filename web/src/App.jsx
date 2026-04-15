@@ -516,11 +516,16 @@ export default function App() {
                     </div>
                     <button
                       onClick={async () => {
+                        console.log(`[UI] Delete account clicked: ${acc.id}`);
                         if (!window.confirm(`Supprimer ce compte ${platformName} ?`)) return;
                         try {
                           await axios.delete(`${API}/accounts/${acc.id}`);
+                          console.log(`[UI] Delete account success: ${acc.id}`);
                           preloadData();
-                        } catch (err) { alert('Erreur suppression'); }
+                        } catch (err) { 
+                          console.error(`[UI] Delete account ERROR: ${acc.id}`, err);
+                          alert('Erreur suppression'); 
+                        }
                       }}
                       className="delete-acc-btn"
                       style={{marginLeft:'auto', padding: 10, cursor: 'pointer', background: 'transparent', border: 'none'}}

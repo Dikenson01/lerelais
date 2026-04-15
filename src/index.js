@@ -489,7 +489,19 @@ app.get('/api/connect/whatsapp/status/:id', async (req, res) => {
 app.delete('/api/accounts/:id', async (req, res) => {
   const accountId = req.params.id;
   try {
-    logger.info(`[CLEANUP] Deleting account ${accountId} (User: ${req.userId})...`);
+    logger.info(`[CLEANUP] DELETE REQUEST for Account: ${accountId} | From User: ${req.userId}`);
+    
+    // Check if account exists and belongs to user
+    const { data: acc } = await supabase.from('accounts').select('id, user_id').eq('id', accountId).single();
+    if (!acc) {
+      logger.warn(`[CLEANUP] Account ${accountId} not found in DB`);
+      return res.status(404).json({ error: 'Compte non trouvé' });
+    }
+
+    if (acc.user_id !== req.userId) {
+      logger.warn(`[CLEANUP] Unauthorized delete attempt: User ${req.userId} vs Account Owner ${acc.user_id}`);
+      return res.status(403).json({ error: 'Action non autorisée' });
+    }
     
     // 1. Delete all related data first (cascading cleanup)
     await supabase.from('messages').delete().eq('account_id', accountId);
@@ -504,9 +516,10 @@ app.delete('/api/accounts/:id', async (req, res) => {
     }
     
     // 3. Delete the account record
-    const { error } = await supabase.from('accounts').delete().eq('id', accountId).eq('user_id', req.userId);
+    const { error } = await supabase.from('accounts').delete().eq('id', accountId);
     if (error) throw error;
 
+    logger.info(`[CLEANUP] Account ${accountId} successfully deleted from all tables`);
     res.json({ success: true });
   } catch (err) {
     logger.error(`[CLEANUP-ERR] ${err.message}`);
