@@ -625,7 +625,36 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
                }
              }
           };
+          // 3. ACTUALISATION GLOBALE DES CONTACTS (Noms et Photos)
+          const refreshAllContactsMetadata = async () => {
+             try {
+                const { data: cts } = await supabase.from('contacts').select('external_id, display_name').eq('account_id', accountId);
+                if (!cts?.length) return;
+                
+                logger.info(`[WA-REFRESH] Refreshing metadata for ${cts.length} contacts...`);
+                for (const c of cts) {
+                   if (!sock) break;
+                   try {
+                      const ppUrl = await sock.profilePictureUrl(c.external_id, 'image').catch(() => null);
+                      const latestContact = await sock.onWhatsApp(c.external_id).catch(() => []);
+                      
+                      const updates = {};
+                      if (ppUrl) updates.avatar_url = ppUrl;
+                      
+                      if (Object.keys(updates).length > 0) {
+                         await supabase.from('contacts').update(updates).eq('account_id', accountId).eq('external_id', c.external_id);
+                      }
+                   } catch (e) {}
+                   await delay(2000); // Rate limit strict
+                }
+                logger.info('[WA-REFRESH] All contact metadata refreshed.');
+             } catch (e) {
+                logger.error('[WA-REFRESH-ERR]', e.message);
+             }
+          };
+
           await scanGroupsNames();
+          refreshAllContactsMetadata(); // Lancer en arrière-plan sans await
 
           logger.info('[WA-MAINTENANCE] Post-connection maintenance finished.');
           
