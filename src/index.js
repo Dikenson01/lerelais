@@ -24,9 +24,11 @@ const app = express();
 const PORT = process.env.PORT || 8080;
 // JWT_SECRET: use env var (preferred) or derive deterministically from Supabase credentials so
 // tokens survive server restarts. NEVER use random fallback (invalidates sessions on restart).
+// JWT_SECRET: use env var (preferred) or derive deterministically from Supabase credentials so
+// tokens survive server restarts. NEVER use random fallback (invalidates sessions on restart).
 const JWT_SECRET = process.env.JWT_SECRET ||
-  (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY
-    ? crypto.createHash('sha256').update(process.env.SUPABASE_URL + ':' + process.env.SUPABASE_SERVICE_KEY).digest('hex')
+  (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY
+    ? crypto.createHash('sha256').update(process.env.SUPABASE_URL + ':' + process.env.SUPABASE_SERVICE_ROLE_KEY).digest('hex')
     : (() => { logger.error('[STARTUP] ⚠️  JWT_SECRET not set and Supabase env vars missing — tokens will break on restart! Set JWT_SECRET in Railway env vars.'); return crypto.randomBytes(32).toString('hex'); })()
   );
 const MEDIA_BUCKET = 'Le Relais Media';
