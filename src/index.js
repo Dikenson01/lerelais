@@ -13,6 +13,12 @@ import logger from './utils/logger.js';
 import supabase from './config/supabase.js';
 import { createWhatsAppConnector } from './connectors/whatsapp.js';
 import { connectToInstagram } from './connectors/instagram.js';
+import {
+  startTelegramAuth,
+  verifyTelegramCode,
+  restoreTelegramConnector,
+  sendTelegramMessage
+} from './connectors/telegram.js';
 
 dotenv.config();
 
@@ -483,6 +489,71 @@ app.delete('/api/accounts/:id', async (req, res) => {
 });
 
 // ============================================================
+// TELEGRAM CONNEXION (MTProto — compte utilisateur)
+// ============================================================
+
+// Étape 1 : envoyer le code SMS
+app.post('/api/connect/telegram/start', async (req, res) => {
+  const { phone } = req.body;
+  if (!phone) return res.status(400).json({ error: 'Numéro de téléphone requis' });
+  try {
+    const accountId = crypto.randomUUID();
+    await supabase.from('accounts').insert({
+      id: accountId, user_id: req.userId, platform: 'telegram', status: 'pairing'
+    });
+    await startTelegramAuth(accountId, phone);
+    res.json({ accountId, step: 'code' });
+  } catch (e) {
+    logger.error('[TG-START]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Étape 2 : vérifier le code (+ 2FA optionnel)
+app.post('/api/connect/telegram/verify', async (req, res) => {
+  const { accountId, code, password2fa } = req.body;
+  if (!accountId || !code) return res.status(400).json({ error: 'accountId et code requis' });
+  try {
+    const result = await verifyTelegramCode(accountId, code, password2fa || null);
+    if (result.step === 'connected') {
+      // Store connector in activeConnectors so message sending works
+      activeConnectors[accountId] = {
+        sendMessage: async (chatId, text) => sendTelegramMessage(accountId, chatId, text),
+        disconnect: async () => {}
+      };
+    }
+    res.json(result);
+  } catch (e) {
+    logger.error('[TG-VERIFY]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ============================================================
+// INSTAGRAM CONNEXION
+// ============================================================
+
+app.post('/api/connect/instagram', async (req, res) => {
+  const { username, password } = req.body;
+  if (!username || !password) return res.status(400).json({ error: 'Identifiant et mot de passe requis' });
+  try {
+    const accountId = crypto.randomUUID();
+    await supabase.from('accounts').insert({
+      id: accountId, user_id: req.userId, platform: 'instagram', status: 'pairing', username
+    });
+    const connector = await connectToInstagram(accountId, username, password,
+      (platform, from, text) => relayToTelegram(platform, from, text, accountId, from),
+      { onConnected: () => { activeConnectors[accountId] = connector; } }
+    );
+    activeConnectors[accountId] = connector;
+    res.json({ accountId, status: 'connected' });
+  } catch (e) {
+    logger.error('[IG-CONNECT]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ============================================================
 // PAGES WEB LEGACY (QR, pairing code)
 // ============================================================
 
@@ -533,22 +604,30 @@ app.use((req, res, next) => {
 
 async function restoreConnectors() {
   try {
-    // Restaure TOUS les comptes connectés — pas de verrou par ID
-    let query = supabase.from('accounts').select('*').eq('status', 'connected').eq('platform', 'whatsapp');
-
-    const { data: accounts } = await query;
+    const { data: accounts } = await supabase.from('accounts').select('*').eq('status', 'connected');
     logger.info(`🔍 Startup: ${accounts?.length || 0} accounts à restaurer`);
 
     for (const acc of (accounts || [])) {
-      logger.info(`🔄 Restoring: ${acc.id}`);
-      const connector = await createWhatsAppConnector(acc.id, (type, payload) => {
-        if (type === 'qr') qrMap.set(acc.id, payload);
-        else if (type === 'status') {
-          supabase.from('accounts').update({ status: payload.status }).eq('id', acc.id).then(() => {});
-          if (payload.status === 'connected') { qrMap.delete(acc.id); activeConnectors[acc.id] = connector; }
-        } else if (type === 'message') relayToTelegram('whatsapp', payload.jid, payload.text, acc.id, payload.jid);
-      });
-      activeConnectors[acc.id] = connector;
+      logger.info(`🔄 Restoring ${acc.platform}: ${acc.id}`);
+
+      if (acc.platform === 'whatsapp') {
+        const connector = await createWhatsAppConnector(acc.id, (type, payload) => {
+          if (type === 'qr') qrMap.set(acc.id, payload);
+          else if (type === 'status') {
+            supabase.from('accounts').update({ status: payload.status }).eq('id', acc.id).then(() => {});
+            if (payload.status === 'connected') { qrMap.delete(acc.id); activeConnectors[acc.id] = connector; }
+          } else if (type === 'message') relayToTelegram('whatsapp', payload.jid, payload.text, acc.id, payload.jid);
+        });
+        activeConnectors[acc.id] = connector;
+
+      } else if (acc.platform === 'telegram') {
+        const connector = await restoreTelegramConnector(acc.id);
+        if (connector) activeConnectors[acc.id] = connector;
+
+      } else if (acc.platform === 'instagram') {
+        // Instagram sessions are not persistent — user must reconnect
+        await supabase.from('accounts').update({ status: 'disconnected' }).eq('id', acc.id);
+      }
     }
   } catch (err) {
     logger.error('Restore error:', err.message);

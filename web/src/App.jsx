@@ -93,6 +93,19 @@ export default function App() {
   const [pairingQR, setPairingQR] = useState(null);
   const [pairingStatus, setPairingStatus] = useState(null);
   const [pairingId, setPairingId] = useState(null);
+  // Telegram pairing state
+  const [tgPhone, setTgPhone] = useState('');
+  const [tgCode, setTgCode] = useState('');
+  const [tg2FA, setTg2FA] = useState('');
+  const [tgStep, setTgStep] = useState(null); // null | 'phone' | 'code' | '2fa' | 'connected'
+  const [tgAccountId, setTgAccountId] = useState(null);
+  const [tgError, setTgError] = useState('');
+  // Instagram pairing state
+  const [igUsername, setIgUsername] = useState('');
+  const [igPassword, setIgPassword] = useState('');
+  const [igStep, setIgStep] = useState(null); // null | 'login' | 'connecting' | 'connected'
+  const [igError, setIgError] = useState('');
+  const [activeNetwork, setActiveNetwork] = useState(null); // 'whatsapp' | 'telegram' | 'instagram'
 
   const messagesEndRef = useRef(null);
   const messagesAreaRef = useRef(null);
@@ -195,11 +208,73 @@ export default function App() {
   };
 
   const startWAPairing = async () => {
+    setActiveNetwork('whatsapp');
     setPairingStatus('waiting_qr');
     try {
       const r = await axios.post(`${API}/connect/whatsapp`);
       setPairingId(r.data.accountId);
     } catch (e) { setPairingStatus(null); }
+  };
+
+  // ── Telegram auth ─────────────────────────────────────────
+  const startTelegramPairing = async (e) => {
+    e?.preventDefault();
+    setTgError('');
+    if (!tgPhone.trim()) return;
+    try {
+      setTgStep('connecting');
+      const r = await axios.post(`${API}/connect/telegram/start`, { phone: tgPhone });
+      setTgAccountId(r.data.accountId);
+      setTgStep('code');
+    } catch (err) {
+      setTgError(err.response?.data?.error || 'Erreur connexion Telegram');
+      setTgStep('phone');
+    }
+  };
+
+  const verifyTelegramCode = async (e) => {
+    e?.preventDefault();
+    setTgError('');
+    if (!tgCode.trim()) return;
+    try {
+      setTgStep('connecting');
+      const r = await axios.post(`${API}/connect/telegram/verify`, {
+        accountId: tgAccountId, code: tgCode, password2fa: tg2FA || null
+      });
+      if (r.data.step === '2fa') { setTgStep('2fa'); return; }
+      if (r.data.step === 'connected') {
+        setTgStep('connected');
+        preloadData();
+        setTimeout(() => { setShowAddModal(false); resetPairingState(); }, 2500);
+      }
+    } catch (err) {
+      setTgError(err.response?.data?.error || 'Code incorrect');
+      setTgStep(tg2FA ? '2fa' : 'code');
+    }
+  };
+
+  // ── Instagram auth ────────────────────────────────────────
+  const connectInstagram = async (e) => {
+    e?.preventDefault();
+    setIgError('');
+    if (!igUsername.trim() || !igPassword.trim()) return;
+    try {
+      setIgStep('connecting');
+      await axios.post(`${API}/connect/instagram`, { username: igUsername, password: igPassword });
+      setIgStep('connected');
+      preloadData();
+      setTimeout(() => { setShowAddModal(false); resetPairingState(); }, 2500);
+    } catch (err) {
+      setIgError(err.response?.data?.error || 'Identifiants incorrects');
+      setIgStep('login');
+    }
+  };
+
+  const resetPairingState = () => {
+    setPairingStatus(null); setPairingQR(null); setPairingId(null);
+    setTgPhone(''); setTgCode(''); setTg2FA(''); setTgStep(null); setTgAccountId(null); setTgError('');
+    setIgUsername(''); setIgPassword(''); setIgStep(null); setIgError('');
+    setActiveNetwork(null);
   };
 
   useEffect(() => {
@@ -593,77 +668,140 @@ export default function App() {
 
       {/* ADD ACCOUNT MODAL */}
       {showAddModal && (
-        <div className="modal-overlay" onClick={()=>{setShowAddModal(false);setPairingStatus(null);setPairingQR(null);}}>
-          <div className="elite-modal" onClick={e=>e.stopPropagation()}>
-            {pairingStatus === 'waiting_qr' ? (
+        <div className="modal-overlay" onClick={()=>{setShowAddModal(false); resetPairingState();}}>
+          <div className="elite-modal" onClick={e=>e.stopPropagation()} style={{maxHeight:'90vh', overflowY:'auto'}}>
+
+            {/* ── WhatsApp QR ── */}
+            {activeNetwork === 'whatsapp' && pairingStatus === 'waiting_qr' ? (
               <div style={{textAlign:'center'}}>
+                <button onClick={resetPairingState} style={{position:'absolute', top:16, right:16, color:'var(--text-dim)', padding:8}}><X size={18}/></button>
                 <h2 style={{marginBottom:10}}>Scanner le QR Code</h2>
-                <p style={{color:'var(--text-dim)', marginBottom:20}}>WhatsApp {'>'} Appareils connectés {'>'} Lier un appareil</p>
+                <p style={{color:'var(--text-dim)', marginBottom:20, fontSize:13}}>WhatsApp → Appareils connectés → Lier un appareil</p>
                 <div style={{background:'white', padding:20, borderRadius:20, display:'inline-block'}}>
                   {pairingQR ? <QRCode value={pairingQR} size={200}/> : <Loader2 className="spinner" size={40}/>}
                 </div>
                 {pairingStatus === 'connected' && <p style={{marginTop:20, color:'var(--accent-green)'}}>✅ Connecté !</p>}
-                <p style={{marginTop:12, color:'var(--text-dim)', fontSize:12}}>Le QR code expire dans 60s — rafraîchissez si besoin</p>
+                <p style={{marginTop:12, color:'var(--text-dim)', fontSize:12}}>Le QR expire dans 60s</p>
               </div>
+
+            /* ── Telegram phone ── */
+            ) : activeNetwork === 'telegram' && tgStep === 'phone' ? (
+              <div>
+                <button onClick={resetPairingState} style={{float:'right', color:'var(--text-dim)', padding:4}}><X size={18}/></button>
+                <h2 style={{marginBottom:6}}>Connecter Telegram</h2>
+                <p style={{color:'var(--text-dim)', fontSize:13, marginBottom:20}}>Entrez votre numéro de téléphone Telegram</p>
+                <form onSubmit={startTelegramPairing}>
+                  <input className="lx-input" placeholder="+33 6 12 34 56 78" value={tgPhone} onChange={e=>setTgPhone(e.target.value)} required/>
+                  {tgError && <p style={{color:'var(--accent-red)', fontSize:12, marginBottom:8}}>{tgError}</p>}
+                  <button type="submit" className="lx-btn" style={{background:'#229ED9', color:'white'}}>Envoyer le code SMS</button>
+                </form>
+              </div>
+
+            ) : activeNetwork === 'telegram' && tgStep === 'connecting' ? (
+              <div style={{textAlign:'center', padding:'30px 0'}}>
+                <Loader2 className="spinner" size={36} style={{color:'#229ED9'}}/>
+                <p style={{marginTop:16, color:'var(--text-dim)'}}>Connexion à Telegram...</p>
+              </div>
+
+            ) : activeNetwork === 'telegram' && (tgStep === 'code' || tgStep === '2fa') ? (
+              <div>
+                <button onClick={resetPairingState} style={{float:'right', color:'var(--text-dim)', padding:4}}><X size={18}/></button>
+                <h2 style={{marginBottom:6}}>{tgStep === '2fa' ? 'Mot de passe 2FA' : 'Code de vérification'}</h2>
+                <p style={{color:'var(--text-dim)', fontSize:13, marginBottom:20}}>
+                  {tgStep === '2fa' ? 'Votre compte Telegram a la vérification en 2 étapes activée.' : `Code envoyé au ${tgPhone}`}
+                </p>
+                <form onSubmit={verifyTelegramCode}>
+                  {tgStep === 'code' && <input className="lx-input" placeholder="Code à 5 chiffres" value={tgCode} onChange={e=>setTgCode(e.target.value)} maxLength={8} required/>}
+                  {tgStep === '2fa' && <input className="lx-input" type="password" placeholder="Mot de passe 2FA" value={tg2FA} onChange={e=>setTg2FA(e.target.value)} required/>}
+                  {tgError && <p style={{color:'var(--accent-red)', fontSize:12, marginBottom:8}}>{tgError}</p>}
+                  <button type="submit" className="lx-btn" style={{background:'#229ED9', color:'white'}}>Confirmer</button>
+                </form>
+              </div>
+
+            ) : activeNetwork === 'telegram' && tgStep === 'connected' ? (
+              <div style={{textAlign:'center', padding:'20px 0'}}>
+                <p style={{fontSize:40}}>✅</p>
+                <h2 style={{marginTop:12}}>Telegram connecté !</h2>
+                <p style={{color:'var(--text-dim)', marginTop:8}}>Vos messages Telegram apparaîtront dans le Hub.</p>
+              </div>
+
+            /* ── Instagram login ── */
+            ) : activeNetwork === 'instagram' && igStep === 'login' ? (
+              <div>
+                <button onClick={resetPairingState} style={{float:'right', color:'var(--text-dim)', padding:4}}><X size={18}/></button>
+                <h2 style={{marginBottom:6}}>Connecter Instagram</h2>
+                <p style={{color:'var(--text-dim)', fontSize:13, marginBottom:4}}>Identifiants de votre compte Instagram</p>
+                <p style={{color:'#f09433', fontSize:11, marginBottom:16}}>⚠️ Utilisez un compte secondaire — Instagram peut détecter les connexions automatiques.</p>
+                <form onSubmit={connectInstagram}>
+                  <input className="lx-input" placeholder="Nom d'utilisateur Instagram" value={igUsername} onChange={e=>setIgUsername(e.target.value)} required/>
+                  <input className="lx-input" type="password" placeholder="Mot de passe" value={igPassword} onChange={e=>setIgPassword(e.target.value)} required/>
+                  {igError && <p style={{color:'var(--accent-red)', fontSize:12, marginBottom:8}}>{igError}</p>}
+                  <button type="submit" className="lx-btn" style={{background:'linear-gradient(45deg,#f09433,#dc2743,#bc1888)', color:'white'}}>Se connecter</button>
+                </form>
+              </div>
+
+            ) : activeNetwork === 'instagram' && igStep === 'connecting' ? (
+              <div style={{textAlign:'center', padding:'30px 0'}}>
+                <Loader2 className="spinner" size={36} style={{color:'#dc2743'}}/>
+                <p style={{marginTop:16, color:'var(--text-dim)'}}>Connexion à Instagram...</p>
+              </div>
+
+            ) : activeNetwork === 'instagram' && igStep === 'connected' ? (
+              <div style={{textAlign:'center', padding:'20px 0'}}>
+                <p style={{fontSize:40}}>✅</p>
+                <h2 style={{marginTop:12}}>Instagram connecté !</h2>
+                <p style={{color:'var(--text-dim)', marginTop:8}}>Vos DMs Instagram apparaîtront dans le Hub.</p>
+              </div>
+
+            /* ── Liste des réseaux ── */
             ) : (
               <div>
                 <h2 style={{marginBottom:6}}>Connecter un compte</h2>
                 <p style={{color:'var(--text-dim)', fontSize:13, marginBottom:20}}>Choisissez le réseau à connecter</p>
 
-                {/* WhatsApp — compte principal ou supplémentaire */}
-                <div className="conv-card" style={{background:'var(--surface-200)', border:'1px solid var(--border-muted)', marginBottom:10}} onClick={startWAPairing}>
+                {/* WhatsApp */}
+                <div className="conv-card" style={{background:'var(--surface-200)', border:'1px solid var(--border-muted)', marginBottom:10, cursor:'pointer'}} onClick={startWAPairing}>
                   <div style={{width:36,height:36,borderRadius:'50%',background:'#25D366',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="white"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/><path d="M12 0C5.373 0 0 5.373 0 12c0 2.117.554 4.103 1.523 5.824L.057 23.882l6.233-1.635A11.945 11.945 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 21.818c-1.961 0-3.79-.527-5.364-1.446l-.384-.228-3.984 1.045 1.063-3.878-.25-.398A9.796 9.796 0 012.182 12C2.182 6.57 6.57 2.182 12 2.182S21.818 6.57 21.818 12 17.43 21.818 12 21.818z"/></svg>
                   </div>
-                  <div className="conv-content">
-                    <strong>WhatsApp</strong>
-                    <small style={{color:'var(--text-dim)'}}>Synchronisation miroir · scan QR</small>
-                  </div>
+                  <div className="conv-content"><strong>WhatsApp</strong><small style={{color:'var(--text-dim)'}}>Scan QR · miroir de votre compte</small></div>
                 </div>
 
-                {/* Instagram — à venir */}
-                <div className="conv-card" style={{background:'var(--surface-100)', border:'1px dashed var(--border-muted)', marginBottom:10, opacity:0.5, cursor:'not-allowed'}}>
-                  <div style={{width:36,height:36,borderRadius:'50%',background:'linear-gradient(45deg,#f09433,#e6683c,#dc2743,#cc2366,#bc1888)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="white"><path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z"/></svg>
-                  </div>
-                  <div className="conv-content">
-                    <strong>Instagram</strong>
-                    <small style={{color:'var(--text-dim)'}}>Bientôt disponible</small>
-                  </div>
-                </div>
-
-                {/* Telegram — à venir */}
-                <div className="conv-card" style={{background:'var(--surface-100)', border:'1px dashed var(--border-muted)', opacity:0.5, cursor:'not-allowed', marginBottom:10}}>
+                {/* Telegram */}
+                <div className="conv-card" style={{background:'var(--surface-200)', border:'1px solid var(--border-muted)', marginBottom:10, cursor:'pointer'}} onClick={()=>{setActiveNetwork('telegram'); setTgStep('phone');}}>
                   <div style={{width:36,height:36,borderRadius:'50%',background:'#229ED9',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="white"><path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"/></svg>
                   </div>
-                  <div className="conv-content">
-                    <strong>Telegram</strong>
-                    <small style={{color:'var(--text-dim)'}}>Bientôt disponible</small>
-                  </div>
+                  <div className="conv-content"><strong>Telegram</strong><small style={{color:'var(--accent-green)', fontSize:11}}>✓ Disponible · numéro de téléphone</small></div>
                 </div>
 
-                {/* Signal — à venir */}
-                <div className="conv-card" style={{background:'var(--surface-100)', border:'1px dashed var(--border-muted)', opacity:0.5, cursor:'not-allowed', marginBottom:10}}>
+                {/* Instagram */}
+                <div className="conv-card" style={{background:'var(--surface-200)', border:'1px solid var(--border-muted)', marginBottom:10, cursor:'pointer'}} onClick={()=>{setActiveNetwork('instagram'); setIgStep('login');}}>
+                  <div style={{width:36,height:36,borderRadius:'50%',background:'linear-gradient(45deg,#f09433,#e6683c,#dc2743,#cc2366,#bc1888)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="white"><path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z"/></svg>
+                  </div>
+                  <div className="conv-content"><strong>Instagram</strong><small style={{color:'var(--accent-green)', fontSize:11}}>✓ Disponible · identifiants</small></div>
+                </div>
+
+                {/* Signal — nécessite configuration serveur */}
+                <div className="conv-card" style={{background:'var(--surface-100)', border:'1px dashed var(--border-muted)', marginBottom:10, opacity:0.5, cursor:'not-allowed'}}>
                   <div style={{width:36,height:36,borderRadius:'50%',background:'#3A76F0',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
-                    {/* Signal logo simplified */}
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="white"><path d="M12 0C5.374 0 0 5.373 0 12c0 2.023.52 3.925 1.433 5.582L.054 23.88l6.405-1.673A11.945 11.945 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm.174 18.784c-1.032 0-2.03-.18-2.96-.51l-3.04.836.85-2.97a6.781 6.781 0 01-1.178-3.838c0-3.774 3.084-6.836 6.886-6.836 3.8 0 6.884 3.062 6.884 6.836 0 3.773-3.084 6.836-6.886 6.836l.444-.354z"/></svg>
                   </div>
                   <div className="conv-content">
                     <strong>Signal</strong>
-                    <small style={{color:'var(--text-dim)'}}>Bientôt disponible</small>
+                    <small style={{color:'var(--text-dim)', fontSize:11}}>Requiert signal-cli · configuration serveur</small>
                   </div>
                 </div>
 
-                {/* Snapchat — à venir */}
+                {/* Snapchat — pas d'API publique */}
                 <div className="conv-card" style={{background:'var(--surface-100)', border:'1px dashed var(--border-muted)', opacity:0.5, cursor:'not-allowed'}}>
                   <div style={{width:36,height:36,borderRadius:'50%',background:'#FFFC00',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
-                    {/* Snapchat ghost icon */}
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="#000"><path d="M12.017 0C8.3 0 7.86.015 7.86.015 4.93.15 2.875 1.01 1.715 2.17.557 3.326-.002 4.866 0 8.006c0 .44.013 1.94.013 3.994C.013 16.11.013 16.543 0 16.994c.002 3.14.559 4.68 1.715 5.836C2.874 23.986 4.93 24.848 7.86 24.984c0 0 .44.016 4.157.016 3.716 0 4.14-.016 4.14-.016 2.928-.136 4.985-.998 6.143-2.154C23.454 21.672 24 20.13 24 16.994c0-.45-.013-1.94-.013-3.994C23.987 8 23.987 7.57 24 7.006 24 3.866 23.443 2.326 22.285 1.17 21.127.016 19.072-.847 16.142-.984 16.142-.984 15.72-1 12.017 0zm-.001 2.16c3.648 0 4.08.014 4.08.014 2.475.113 3.813.805 4.577 1.57.766.764 1.46 2.1 1.573 4.576.013.45.013 1.925.013 3.964v.003c0 2.04 0 3.516-.013 3.965-.113 2.476-.807 3.81-1.573 4.576-.764.764-2.102 1.457-4.577 1.57-.4.014-4.08.014-4.08.014s-3.698 0-4.095-.013c-2.476-.112-3.814-.806-4.578-1.57C3.36 20.094 2.667 18.76 2.554 16.283c-.013-.45-.013-1.925-.013-3.965v-.003c0-2.04 0-3.515.013-3.964.113-2.476.807-3.812 1.57-4.576.766-.766 2.103-1.458 4.579-1.571.395-.013 4.08-.013 4.08-.013s.234-.03.233-.03z"/></svg>
                   </div>
                   <div className="conv-content">
                     <strong>Snapchat</strong>
-                    <small style={{color:'var(--text-dim)'}}>Bientôt disponible</small>
+                    <small style={{color:'var(--text-dim)', fontSize:11}}>Pas d'API disponible publiquement</small>
                   </div>
                 </div>
               </div>

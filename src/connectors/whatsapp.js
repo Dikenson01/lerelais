@@ -620,25 +620,29 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
           // 3. Scan photos de profil (par lot, progressif, avec retry)
           // FIXED: avoid infinite loop — contacts without avatars are marked with metadata.avatar_checked_at
           // so they're only retried after 7 days (not every 5min forever).
+          // IMPROVED: try 'preview' type first (higher success rate for contacts with "My Contacts" privacy),
+          //           then fall back to 'image'. Also now fetches GROUP photos too.
           const scanAvatars = async () => {
             const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
-            // Only fetch contacts that: have no avatar AND (never checked OR checked > 7 days ago)
-            const { data: contacts } = await supabase.from('contacts').select('id, external_id, metadata')
+            // --- A. CONTACTS (non-@lid, non-@g.us) ---
+            const { data: contactsBatch } = await supabase.from('contacts').select('id, external_id, metadata')
               .is('avatar_url', null)
               .eq('account_id', accountId)
               .not('external_id', 'like', '%@lid')
               .not('external_id', 'like', '%@g.us')
               .or(`metadata->avatar_checked_at.is.null,metadata->>avatar_checked_at.lt.${sevenDaysAgo}`)
-              .limit(50); // Max 50 per cycle → ~75s max (not 25min)
+              .limit(50); // Max 50 per cycle → ~75s max
 
-            if (contacts && contacts.length > 0) {
-              logger.info(`[WA-PDP] Fetching ${contacts.length} profile photos (batch, retry in 7d if no avatar)...`);
+            if (contactsBatch && contactsBatch.length > 0) {
+              logger.info(`[WA-PDP] Fetching ${contactsBatch.length} contact profile photos...`);
               let fetched = 0;
-              for (const contact of contacts) {
+              for (const contact of contactsBatch) {
                 if (!_sock) break;
                 try {
-                  const cdnUrl = await sock.profilePictureUrl(contact.external_id, 'image').catch(() => null);
+                  // Try 'preview' first — higher success rate with "My Contacts" privacy setting
+                  let cdnUrl = await _sock.profilePictureUrl(contact.external_id, 'preview').catch(() => null);
+                  if (!cdnUrl) cdnUrl = await _sock.profilePictureUrl(contact.external_id, 'image').catch(() => null);
                   const checkedAt = new Date().toISOString();
                   if (cdnUrl) {
                     const permanentUrl = await downloadAndStoreAvatar(contact.id, cdnUrl);
@@ -646,19 +650,17 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
                       await supabase.from('contacts').update({ avatar_url: permanentUrl }).eq('id', contact.id);
                       fetched++;
                     } else {
-                      // Store failed → mark as checked so we don't retry for 7 days
                       await supabase.from('contacts').update({ metadata: { ...(contact.metadata || {}), avatar_checked_at: checkedAt } }).eq('id', contact.id);
                     }
                   } else {
-                    // No avatar (privacy setting) → mark as checked, retry in 7 days
                     await supabase.from('contacts').update({ metadata: { ...(contact.metadata || {}), avatar_checked_at: checkedAt } }).eq('id', contact.id);
                   }
-                  await delay(1500); // Rate-limit protection
+                  await delay(1200);
                 } catch (e) {}
               }
-              logger.info(`[WA-PDP] Fetched ${fetched}/${contacts.length} avatars.`);
+              logger.info(`[WA-PDP] Fetched ${fetched}/${contactsBatch.length} contact avatars.`);
 
-              // Schedule next batch in 5 minutes (to check remaining unchecked contacts)
+              // Schedule next batch in 5 minutes if more remain
               if (_sock) {
                 const { count } = await supabase.from('contacts')
                   .select('id', { count: 'exact', head: true })
@@ -668,12 +670,54 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
                   .not('external_id', 'like', '%@g.us')
                   .or(`metadata->avatar_checked_at.is.null,metadata->>avatar_checked_at.lt.${sevenDaysAgo}`);
                 if (count > 0) {
-                  logger.info(`[WA-PDP] ${count} avatars remaining. Next batch in 5min...`);
+                  logger.info(`[WA-PDP] ${count} contacts remaining. Next batch in 5min...`);
                   setTimeout(scanAvatars, 300000);
                 } else {
-                  logger.info('[WA-PDP] All avatars checked. No retry needed until 7-day window expires.');
+                  logger.info('[WA-PDP] All contact avatars checked.');
                 }
               }
+            }
+
+            // --- B. GROUPES — fetch group profile pictures → stored in conversations.metadata.photo_url ---
+            try {
+              const { data: groupConvs } = await supabase.from('conversations')
+                .select('id, external_id, metadata')
+                .eq('account_id', accountId)
+                .eq('is_group', true);
+
+              if (groupConvs?.length) {
+                logger.info(`[WA-PDP-GROUPS] Fetching photos for ${groupConvs.length} groups...`);
+                let groupFetched = 0;
+                for (const conv of groupConvs) {
+                  if (!_sock) break;
+                  if (conv.metadata?.photo_url || conv.metadata?.avatar_url) continue; // already have photo
+                  try {
+                    const cdnUrl = await _sock.profilePictureUrl(conv.external_id, 'preview').catch(() => null);
+                    if (cdnUrl) {
+                      // Store via downloadAndStoreAvatar using conv.id as the key
+                      const fileName = `avatars/group_${conv.id}.jpg`;
+                      const res = await fetch(cdnUrl);
+                      if (res.ok) {
+                        const buf = Buffer.from(await res.arrayBuffer());
+                        if (buf.length > 0) {
+                          await supabase.storage.from(MEDIA_BUCKET).upload(fileName, buf, { contentType: 'image/jpeg', upsert: true });
+                          const { data: urlData } = supabase.storage.from(MEDIA_BUCKET).getPublicUrl(fileName);
+                          if (urlData?.publicUrl) {
+                            await supabase.from('conversations').update({
+                              metadata: { ...(conv.metadata || {}), photo_url: urlData.publicUrl }
+                            }).eq('id', conv.id);
+                            groupFetched++;
+                          }
+                        }
+                      }
+                    }
+                    await delay(1200);
+                  } catch (e) {}
+                }
+                logger.info(`[WA-PDP-GROUPS] Fetched ${groupFetched}/${groupConvs.length} group photos.`);
+              }
+            } catch (e) {
+              logger.warn(`[WA-PDP-GROUPS] ${e.message}`);
             }
           };
           scanAvatars(); // Lancer en arrière-plan SANS await
@@ -1032,7 +1076,9 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
       for (const contact of contacts) {
         const jid = jidNormalizedUser(contact.id);
         const lid = contact.id.endsWith('@lid') ? jid : null;
-        const name = contact.name || contact.notify || jid.split('@')[0];
+        // FIXED: never fall back to jid.split('@')[0] as a name (stores raw numeric ID like "176008481255424")
+        // For @lid contacts without a real name, use null → UI shows 'Inconnu' until contacts.update provides the real name
+        const name = contact.name || contact.notify || (jid.endsWith('@lid') ? null : jid.split('@')[0]);
 
         await upsertContact(jid, name, lid);
 
@@ -1169,9 +1215,12 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
           media_url: mediaUrl,
           is_from_me: isFromMe,
           timestamp: new Date((msg.messageTimestamp?.low || msg.messageTimestamp || Date.now() / 1000) * 1000),
-          metadata: { 
+          metadata: {
             participant: msg.key.participant || null,
-            quoted: quoted
+            quoted: quoted,
+            // FIXED: store pushName so group chat renders sender's name correctly
+            // (resolveContactName fallback can fail for @lid contacts)
+            pushName: msg.pushName || null
           }
         }, { onConflict: 'remote_id' }).select('id').single();
 
