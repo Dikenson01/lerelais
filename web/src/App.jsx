@@ -281,38 +281,74 @@ export default function App() {
       {/* LIST PANE */}
       <div className={`list-pane ${selectedConv && isMobile ? 'hidden' : ''}`}>
         <header className="pane-header">
-           <h1>{view==='archive'?'Archives':view==='contacts'?'Contacts':'Messages'} <span className="badge">{sortedConvs.length}</span></h1>
+           <h1>{view==='archive'?'Archives':view==='contacts'?'Contacts':view==='settings'?'Paramètres':'Messages'} <span className="badge">
+             {view==='contacts' ? contacts.length : view==='settings' ? accounts.length : sortedConvs.length}
+           </span></h1>
            <div className="search-box"><Search size={16} color="var(--text-dim)"/><input placeholder="Rechercher..." value={searchQuery} onChange={e=>setSearchQuery(e.target.value)}/></div>
         </header>
 
         <div className="scroll-area">
-           {sortedConvs.map(conv => (
-             <div key={conv.id} className={`conv-card ${selectedConv?.id===conv.id?'active':''}`} onClick={()=>setSelectedConv(conv)}>
-                <div className="avatar-wrap">
-                  {getAvatar(conv) ? (
-                    <img 
-                      src={getAvatar(conv)} 
-                      alt="" 
-                      onError={(e) => e.target.style.display = 'none'} 
-                    />
-                  ) : null}
-                  <div className="avatar-placeholder"/>
-                  <div className="platform-dot whatsapp"/>
-                </div>
-                <div className="conv-content">
-                  <div className="conv-top">
-                    <strong>{getDisplayName(conv)} {conv.metadata?.is_pinned && <Pin size={10} style={{marginLeft:4, color:'var(--accent-gold)'}}/>}</strong>
-                    <div style={{display:'flex', alignItems:'center', gap:'8px'}}>
-                      <span className="time">{conv.last_message_at ? new Date(conv.last_message_at).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : ''}</span>
-                      <button className="archive-btn" onClick={(e) => { e.stopPropagation(); toggleArchive(conv); }}>
-                        <Archive size={14} color={conv.metadata?.is_archived ? 'var(--accent-gold)' : 'var(--text-dim)'}/>
-                      </button>
-                    </div>
+           {view === 'contacts' ? (
+             contacts.filter(c => c.display_name?.toLowerCase().includes(searchQuery.toLowerCase())).map(contact => (
+               <div key={contact.id} className="conv-card" onClick={() => { 
+                 const existing = conversations.find(cv => cv.contact_id === contact.id);
+                 if (existing) { setSelectedConv(existing); setView('inbox'); }
+                 else { setView('inbox'); /* logic to create new conv could go here */ }
+               }}>
+                  <div className="avatar-wrap">
+                    {contact.avatar_url ? <img src={contact.avatar_url} alt=""/> : <div className="avatar-placeholder"/>}
                   </div>
-                  <p>{conv.last_message_preview || 'Aucun message'}</p>
-                </div>
+                  <div className="conv-content">
+                    <strong>{contact.display_name}</strong>
+                    <p>{contact.phone_number || contact.external_id}</p>
+                  </div>
+               </div>
+             ))
+           ) : view === 'settings' ? (
+             <div style={{padding:'0 24px'}}>
+               <p style={{color:'var(--text-dim)', fontSize:'12px', marginBottom:'20px'}}>Comptes connectés</p>
+               {accounts.map(acc => (
+                 <div key={acc.id} className="conv-card" style={{background:'var(--surface-200)', marginBottom:'12px', border:'1px solid var(--border-muted)'}}>
+                    <div className="platform-dot whatsapp" style={{position:'static'}}/>
+                    <div className="conv-content">
+                      <strong>{acc.username || 'Mon WhatsApp'}</strong>
+                      <p style={{color:'var(--accent-green)'}}>{acc.status || 'Connecté'}</p>
+                    </div>
+                 </div>
+               ))}
+               <button className="lx-btn" style={{marginTop:'20px', background:'var(--accent-red)', color:'white'}} onClick={()=>{clearToken();setUser(null)}}>
+                 Déconnexion du Hub
+               </button>
              </div>
-           ))}
+           ) : (
+             sortedConvs.map(conv => (
+               <div key={conv.id} className={`conv-card ${selectedConv?.id===conv.id?'active':''}`} onClick={()=>setSelectedConv(conv)}>
+                  <div className="avatar-wrap">
+                    {getAvatar(conv) ? (
+                      <img 
+                        src={getAvatar(conv)} 
+                        alt="" 
+                        onError={(e) => e.target.style.display = 'none'} 
+                      />
+                    ) : null}
+                    <div className="avatar-placeholder"/>
+                    <div className="platform-dot whatsapp"/>
+                  </div>
+                  <div className="conv-content">
+                    <div className="conv-top">
+                      <strong>{getDisplayName(conv)} {conv.metadata?.is_pinned && <Pin size={10} style={{marginLeft:4, color:'var(--accent-gold)'}}/>}</strong>
+                      <div style={{display:'flex', alignItems:'center', gap:'8px'}}>
+                        <span className="time">{conv.last_message_at ? new Date(conv.last_message_at).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : ''}</span>
+                        <button className="archive-btn" onClick={(e) => { e.stopPropagation(); toggleArchive(conv); }}>
+                          <Archive size={14} color={conv.metadata?.is_archived ? 'var(--accent-gold)' : 'var(--text-dim)'}/>
+                        </button>
+                      </div>
+                    </div>
+                    <p>{conv.last_message_preview || 'Aucun message'}</p>
+                  </div>
+               </div>
+             ))
+           )}
         </div>
       </div>
 
