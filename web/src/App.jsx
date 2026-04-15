@@ -210,6 +210,14 @@ export default function App() {
     return c?.display_name || conv.title || conv.external_id?.split('@')[0] || 'Inconnu';
   };
 
+  const toggleArchive = async (conv) => {
+    try {
+      const isArchived = !!conv.metadata?.is_archived;
+      await axios.post(`${API}/conversations/${conv.id}/archive`, { archived: !isArchived });
+      preloadData();
+    } catch (e) { alert('Erreur archive'); }
+  };
+
   // Resolve sender ID to display name using contacts list
   const resolveContactName = useCallback((senderId, participantId = null) => {
     const idToSearch = participantId || senderId;
@@ -287,7 +295,12 @@ export default function App() {
                 <div className="conv-content">
                   <div className="conv-top">
                     <strong>{getDisplayName(conv)} {conv.metadata?.is_pinned && <Pin size={10} style={{marginLeft:4, color:'var(--accent-gold)'}}/>}</strong>
-                    <span className="time">{conv.last_message_at ? new Date(conv.last_message_at).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : ''}</span>
+                    <div style={{display:'flex', alignItems:'center', gap:'8px'}}>
+                      <span className="time">{conv.last_message_at ? new Date(conv.last_message_at).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : ''}</span>
+                      <button className="archive-btn" onClick={(e) => { e.stopPropagation(); toggleArchive(conv); }}>
+                        <Archive size={14} color={conv.metadata?.is_archived ? 'var(--accent-gold)' : 'var(--text-dim)'}/>
+                      </button>
+                    </div>
                   </div>
                   <p>{conv.last_message_preview || 'Aucun message'}</p>
                 </div>

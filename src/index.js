@@ -393,6 +393,19 @@ app.post('/api/messages/media', upload.single('file'), async (req, res) => {
   }
 });
 
+// Archive/Désarchive une conversation
+app.post('/api/conversations/:id/archive', async (req, res) => {
+  const { archived } = req.body;
+  try {
+    const { data: conv } = await supabase.from('conversations').select('metadata').eq('id', req.params.id).single();
+    const newMetadata = { ...(conv?.metadata || {}), is_archived: archived };
+    await supabase.from('conversations').update({ metadata: newMetadata }).eq('id', req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ============================================================
 // WHATSAPP CONNECTION
 // ============================================================

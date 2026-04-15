@@ -537,6 +537,21 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
                     size: group.size || group.participants.length
                   }
                 }).eq('id', convId);
+
+                // SYNC PARTICIPANTS AS CONTACTS
+                for (const p of group.participants) {
+                  const jid = jidNormalizedUser(p.id);
+                  if (jid.endsWith('@s.whatsapp.net') || jid.endsWith('@lid')) {
+                    const phone = jid.endsWith('@s.whatsapp.net') ? jid.split('@')[0] : null;
+                    await supabase.from('contacts').upsert({
+                      account_id: accountId,
+                      external_id: jid,
+                      display_name: phone || jid,
+                      phone_number: phone,
+                      metadata: { lid: jid.endsWith('@lid') ? jid : null }
+                    }, { onConflict: 'account_id, external_id', ignoreDuplicates: true });
+                  }
+                }
               }
             }
             logger.info(`[WA-GROUPS] Synced ${Object.keys(groups).length} groups with participants`);
@@ -581,6 +596,9 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
           await scanAvatars();
 
           logger.info('[WA-MAINTENANCE] Post-connection maintenance finished.');
+          
+          // Lancement de la synchronisation de l'historique en cascade
+          startHistoryCascadeWorker();
         }, 30000); // Démarrer 30s après connexion
       }
     });
@@ -683,9 +701,10 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
               jidToConvId[jid] = convId;
               // Mettre à jour timestamp + état archivé
               const { data: existing } = await supabase.from('conversations').select('metadata').eq('id', convId).maybeSingle();
+              const isArchived = chat.archived === true || chat.archive === true;
               await supabase.from('conversations')
                 .update({ 
-                  metadata: { ...(existing?.metadata || {}), is_archived: chat.archived === true },
+                  metadata: { ...(existing?.metadata || {}), is_archived: isArchived },
                   last_message_at: lastMsgAt || new Date()
                 })
                 .eq('id', convId);
@@ -952,6 +971,113 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
         }
       }
     });
+    // --- WORKER DE SYNC EN CASCADE (HISTORIQUE ANCIEN) ---
+    const processHistoryBatch = async (jid) => {
+      if (!sock) return;
+      try {
+        // 1. Trouver le message le plus ancien dans notre DB pour cette conv
+        const { data: oldestDbMsg } = await supabase.from('messages')
+          .select('timestamp, remote_id')
+          .eq('account_id', accountId)
+          .eq('sender_id', jid.endsWith('@g.us') ? undefined : jid) // Filter by conv jid generally
+          .order('timestamp', { ascending: true })
+          .limit(1)
+          .maybeSingle();
+
+        // Plus robuste : récupérer la conversation pour avoir le curseur stocké
+        const { data: conv } = await supabase.from('conversations')
+          .select('id, metadata')
+          .eq('account_id', accountId)
+          .eq('external_id', jid)
+          .single();
+
+        if (conv?.metadata?.history_sync_complete) return;
+
+        const cursorMsgId = conv.metadata?.oldest_msg_id || oldestDbMsg?.remote_id;
+        const limit = 100;
+
+        logger.info(`[WA-CASCADE-SYNC] Fetching history for ${jid} (cursor: ${cursorMsgId || 'START'})`);
+        
+        // fetchMessageHistory est l'API Baileys pour remonter le temps
+        const messages = await sock.fetchMessageHistory(jid, limit, cursorMsgId ? { id: cursorMsgId, fromMe: false } : undefined);
+
+        if (!messages || messages.length === 0) {
+          logger.info(`[WA-CASCADE-SYNC] ${jid} finalized. No more history.`);
+          await supabase.from('conversations').update({
+            metadata: { ...conv.metadata, history_sync_complete: true }
+          }).eq('id', conv.id);
+          return;
+        }
+
+        // Insérer les messages récupérés
+        for (const msg of messages) {
+          if (!msg.message) continue;
+          const ts = (msg.messageTimestamp?.low || msg.messageTimestamp || 0) * 1000;
+          const mediaInfo = getMediaInfo(msg.message);
+          const isGroupMsg = jid.endsWith('@g.us');
+          const finalSenderId = msg.key.fromMe ? accountId : (isGroupMsg ? (msg.key.participant || jid) : jid);
+
+          await supabase.from('messages').upsert({
+            conversation_id: conv.id,
+            account_id: accountId,
+            remote_id: msg.key.id,
+            sender_id: finalSenderId,
+            content: extractContent(msg.message) || (mediaInfo ? `[${mediaInfo.type}]` : ''),
+            media_type: mediaInfo?.type || null,
+            is_from_me: msg.key.fromMe || false,
+            timestamp: new Date(ts || Date.now()),
+            metadata: {
+              has_media: !!mediaInfo,
+              participant: isGroupMsg ? (msg.key.participant || null) : null,
+              pushName: msg.pushName || null,
+              is_history: true
+            }
+          }, { onConflict: 'remote_id' });
+        }
+
+        // Mettre à jour le curseur (le plus ancien de ce batch)
+        const newOldest = messages[messages.length - 1]; // Baileys retourne généralement du plus récent au plus ancien
+        await supabase.from('conversations').update({
+          metadata: { ...conv.metadata, oldest_msg_id: newOldest.key.id }
+        }).eq('id', conv.id);
+
+        logger.info(`[WA-CASCADE-SYNC] ${jid}: inserted ${messages.length} messages.`);
+      } catch (e) {
+        logger.error(`[WA-CASCADE-SYNC-ERR] ${jid}: ${e.message}`);
+      }
+    };
+
+    const startHistoryCascadeWorker = async () => {
+      if (!sock) return;
+      logger.info('[WA-CASCADE-SYNC] Starting background history worker...');
+      
+      while (sock) {
+        try {
+          // Trouver les conversations qui ont besoin de sync
+          const { data: convs } = await supabase.from('conversations')
+            .select('external_id, metadata')
+            .eq('account_id', accountId)
+            .neq('metadata->history_sync_complete', true)
+            .order('last_message_at', { ascending: false })
+            .limit(10);
+
+          if (!convs || convs.length === 0) {
+            logger.info('[WA-CASCADE-SYNC] All histories complete.');
+            break;
+          }
+
+          for (const conv of convs) {
+            await processHistoryBatch(conv.external_id);
+            await delay(1500); // Respecter le délai de sécurité demandé
+          }
+        } catch (e) {
+          logger.error(`[WA-CASCADE-SYNC-LOOP] ${e.message}`);
+          await delay(5000);
+        }
+      }
+    };
+
+    // startHistoryCascadeWorker(); // Retiré d'ici pour être mis dans le hook de maintenance
   };
 
   await startSocket();
