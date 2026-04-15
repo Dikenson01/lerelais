@@ -112,6 +112,7 @@ export default function App() {
   const fileInputRef = useRef(null);
   const isAtBottomRef = useRef(true); // Track if user is scrolled to bottom
   const [callingContact, setCallingContact] = useState(null);
+  const [selectedContactDetail, setSelectedContactDetail] = useState(null);
 
   // ── Auth Init ───────────────────────────────────────────────
   useEffect(() => {
@@ -462,11 +463,7 @@ export default function App() {
                const displayName = getContactName(contact);
                const isUnknown = displayName === 'Contact WhatsApp' || displayName === 'Inconnu';
                return (
-               <div key={contact.id} className="conv-card" onClick={() => {
-                 const existing = conversations.find(cv => cv.contact_id === contact.id);
-                 if (existing) { setSelectedConv(existing); setView('inbox'); }
-                 else { setView('inbox'); }
-               }}>
+                <div key={contact.id} className="conv-card" onClick={() => setSelectedContactDetail(contact)}>
                   <div className="avatar-wrap">
                     {contact.avatar_url
                       ? <img src={contact.avatar_url} alt="" onError={e => { e.target.style.display='none'; e.target.nextElementSibling?.style && (e.target.nextElementSibling.style.display='flex'); }}/>
@@ -579,23 +576,9 @@ export default function App() {
         )}
       </div>
 
-      {/* CHAT PANE */}in size={10} style={{marginLeft:4, color:'var(--accent-gold)'}}/>}</strong>
-                      <div style={{display:'flex', alignItems:'center', gap:'8px'}}>
-                        <span className="time">{conv.last_message_at ? new Date(conv.last_message_at).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : ''}</span>
-                        <button className="archive-btn" onClick={(e) => { e.stopPropagation(); toggleArchive(conv); }}>
-                          <Archive size={14} color={conv.metadata?.is_archived ? 'var(--accent-gold)' : 'var(--text-dim)'}/>
-                        </button>
-                      </div>
-                    </div>
-                    <p>{conv.last_message_preview || 'Aucun message'}</p>
-                  </div>
-               </div>
-             ))
-           )}
-        </div>
-      </div>
 
       {/* CHAT PANE */}
+
       <main className={`chat-pane ${!selectedConv && isMobile ? 'hidden' : ''}`}>
         {selectedConv ? (
           <div className="chat-content" style={{display:'flex', flexDirection:'column', height:'100%'}}>
@@ -877,6 +860,68 @@ export default function App() {
           <button className={`nav-item ${view==='settings'?'active':''}`} onClick={()=>setView('settings')}><Settings size={24}/></button>
         </nav>
       )}
+
+      {/* CONTACT DETAIL MODAL */}
+      <AnimatePresence>
+        {selectedContactDetail && (
+          <motion.div
+            className="modal-overlay"
+            initial={{opacity:0}} animate={{opacity:1}} exit={{opacity:0}}
+            style={{zIndex:2000, background:'rgba(0,0,0,0.85)', backdropFilter:'blur(20px)'}}
+            onClick={() => setSelectedContactDetail(null)}
+          >
+            <motion.div
+              className="calling-card"
+              initial={{scale:0.9, y:20}} animate={{scale:1, y:0}} exit={{scale:0.9, y:20}}
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="avatar-wrap" style={{width:100, height:100, margin:'0 auto'}}>
+                {selectedContactDetail.avatar_url ? <img src={selectedContactDetail.avatar_url} alt="" style={{borderRadius:32}}/> : <div className="avatar-placeholder" style={{borderRadius:32}}/>}
+              </div>
+              <h2 style={{marginTop:24, fontSize:26}}>{getContactName(selectedContactDetail)}</h2>
+              <p style={{color:'var(--text-dim)', marginTop:8, fontSize:15}}>
+                {selectedContactDetail.phone_number ? formatName(selectedContactDetail.phone_number) : selectedContactDetail.external_id?.split('@')[0]}
+              </p>
+
+              <div style={{display:'flex', flexDirection:'column', gap:12, width:'100%', maxWidth:280, marginTop:40}}>
+                 <button
+                   className="lx-btn"
+                   style={{background:'var(--accent-gold)', color:'white', border:'none'}}
+                   onClick={() => {
+                     const existing = conversations.find(cv => cv.contact_id === selectedContactDetail.id);
+                     if (existing) { setSelectedConv(existing); }
+                     setView('inbox');
+                     setSelectedContactDetail(null);
+                   }}
+                 >
+                   <MessageSquare size={18} style={{marginRight:8}}/>
+                   Envoyer un message
+                 </button>
+
+                 <button
+                   className="lx-btn"
+                   style={{background:'var(--surface-300)', border:'1px solid var(--border-muted)'}}
+                   onClick={() => {
+                     const fakeConv = { contacts: [selectedContactDetail], external_id: selectedContactDetail.external_id, title: getContactName(selectedContactDetail) };
+                     startCall(fakeConv);
+                     setSelectedContactDetail(null);
+                   }}
+                 >
+                   <Phone size={18} style={{marginRight:8}}/>
+                   Appeler le contact
+                 </button>
+              </div>
+
+              <button
+                onClick={() => setSelectedContactDetail(null)}
+                style={{color:'var(--text-dim)', fontSize:13, marginTop:32, background:'none', border:'none', cursor:'pointer'}}
+              >
+                Annuler
+              </button>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* CALLING MODAL */}
       <AnimatePresence>
