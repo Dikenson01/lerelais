@@ -516,19 +516,31 @@ export default function App() {
                     </div>
                     <button
                       onClick={async () => {
-                        console.log(`[UI] Delete account clicked: ${acc.id}`);
-                        if (!window.confirm(`Supprimer ce compte ${platformName} ?`)) return;
+                        const ok = window.confirm(`Supprimer définitivement ce compte ${platformName} ?`);
+                        if (!ok) return;
                         try {
+                          console.log(`[DELETE] Requesting for ${acc.id}`);
                           await axios.delete(`${API}/accounts/${acc.id}`);
-                          console.log(`[UI] Delete account success: ${acc.id}`);
+                          console.log(`[DELETE] Success for ${acc.id}`);
                           preloadData();
                         } catch (err) { 
-                          console.error(`[UI] Delete account ERROR: ${acc.id}`, err);
-                          alert('Erreur suppression'); 
+                          console.error(`[DELETE] Error for ${acc.id}`, err);
+                          alert('La suppression a échoué. Réessayez.'); 
                         }
                       }}
                       className="delete-acc-btn"
-                      style={{marginLeft:'auto', padding: 10, cursor: 'pointer', background: 'transparent', border: 'none'}}
+                      style={{
+                        marginLeft:'auto', 
+                        padding: '8px 12px', 
+                        cursor: 'pointer', 
+                        background: 'rgba(239, 68, 68, 0.1)', 
+                        border: '1px solid #ef4444', 
+                        borderRadius: 10,
+                        color: '#ef4444',
+                        display:'flex',
+                        alignItems:'center',
+                        justifyContent:'center'
+                      }}
                     >
                       <Trash size={20}/>
                     </button>
@@ -730,16 +742,32 @@ export default function App() {
               </div>
 
             /* ── Telegram phone ── */
-            ) : activeNetwork === 'telegram' && tgStep === 'phone' ? (
+            ) : activeNetwork === 'telegram' && (tgStep === 'phone' || tgStep === 'qr') ? (
               <div>
                 <button onClick={resetPairingState} style={{float:'right', color:'var(--text-dim)', padding:4}}><X size={18}/></button>
                 <h2 style={{marginBottom:6}}>Connecter Telegram</h2>
-                <p style={{color:'var(--text-dim)', fontSize:13, marginBottom:20}}>Entrez votre numéro de téléphone Telegram</p>
-                <form onSubmit={startTelegramPairing}>
-                  <input className="lx-input" placeholder="+33 6 12 34 56 78" value={tgPhone} onChange={e=>setTgPhone(e.target.value)} required/>
-                  {tgError && <p style={{color:'var(--accent-red)', fontSize:12, marginBottom:8}}>{tgError}</p>}
-                  <button type="submit" className="lx-btn" style={{background:'#229ED9', color:'white'}}>Envoyer le code SMS</button>
-                </form>
+                
+                {tgStep === 'qr' ? (
+                  <div style={{textAlign:'center', marginTop:10}}>
+                    <p style={{fontSize:13, color:'var(--text-dim)', marginBottom:16}}>Scanner avec Telegram {'>'} Appareils {'>'} Connecter</p>
+                    {tgQR ? (
+                      <div style={{background:'white', padding:10, borderRadius:12, display:'inline-block'}}>
+                        <QRCode value={tgQR} size={200} />
+                      </div>
+                    ) : <Loader2 className="spinner" size={30} style={{margin:'20px auto'}}/>}
+                    <button onClick={() => setTgStep('phone')} style={{display:'block', width:'100%', marginTop:20, color:'var(--text-dim)', fontSize:12, textDecoration:'underline'}}>Retour au SMS</button>
+                  </div>
+                ) : (
+                  <>
+                    <p style={{color:'var(--text-dim)', fontSize:13, marginBottom:20}}>Entrez votre numéro de téléphone Telegram</p>
+                    <form onSubmit={startTelegramPairing}>
+                      <input className="lx-input" placeholder="+33 6 12 34 56 78" value={tgPhone} onChange={e=>setTgPhone(e.target.value)} required/>
+                      {tgError && <p style={{color:'var(--accent-red)', fontSize:12, marginBottom:8}}>{tgError}</p>}
+                      <button type="submit" className="lx-btn" style={{background:'#229ED9', color:'white'}}>Envoyer le code SMS</button>
+                    </form>
+                    <button onClick={startTelegramQRFlow} style={{display:'block', width:'100%', marginTop:16, color:'var(--text-dim)', fontSize:12, textDecoration:'underline'}}>Se connecter via QR Code</button>
+                  </>
+                )}
               </div>
 
             ) : activeNetwork === 'telegram' && tgStep === 'connecting' ? (

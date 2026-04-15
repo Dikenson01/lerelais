@@ -38,15 +38,9 @@ export const startTelegramAuth = async (accountId, phoneNumber) => {
     cleanPhone = '33' + cleanPhone;
   }
   
-  // Ensure it has a plus if it's being used as a display string, but MTProto usually wants digits only
   const finalPhone = cleanPhone;
 
-  // Restore existing session if any
-  const { data: acc } = await supabase.from('accounts')
-    .select('metadata').eq('id', accountId).maybeSingle();
-  const savedSession = acc?.metadata?.tg_session || '';
-
-  const client = new TelegramClient(new StringSession(savedSession), apiId, apiHash, {
+  const client = new TelegramClient(new StringSession(''), apiId, apiHash, {
     connectionRetries: 5,
     useWSS: true,
     baseLogger: {
@@ -60,18 +54,81 @@ export const startTelegramAuth = async (accountId, phoneNumber) => {
   await client.connect();
 
   // Send code
-  const { phoneCodeHash } = await client.sendCode({ apiId, apiHash }, finalPhone);
+  try {
+    const { phoneCodeHash } = await client.sendCode({ apiId, apiHash }, finalPhone);
+    tgSessions.set(accountId, { client, phone: finalPhone, phoneCodeHash, step: 'code' });
+    logger.info(`[TG] Code sent to ${finalPhone} for account ${accountId}`);
+    return { step: 'code' };
+  } catch (err) {
+    logger.error(`[TG-CODE-ERR] ${err.message}`);
+    throw err;
+  }
+};
 
-  tgSessions.set(accountId, { client, phone: finalPhone, phoneCodeHash, step: 'code' });
-  logger.info(`[TG] Code sent to ${finalPhone} for account ${accountId}`);
+/**
+ * Alternative: QR Code login
+ */
+export const startTelegramQR = async (accountId) => {
+  const { apiId, apiHash } = getApiCredentials();
+  const client = new TelegramClient(new StringSession(''), apiId, apiHash, {
+    connectionRetries: 5,
+    useWSS: true,
+    baseLogger: {
+      info: (...args) => logger.info('[TG-QR-INT]', ...args),
+      warn: (...args) => logger.warn('[TG-QR-INT]', ...args),
+      error: (...args) => logger.error('[TG-QR-INT]', ...args),
+      debug: () => {}
+    }
+  });
 
-  // Save pairing state
-  await supabase.from('accounts').update({
-    status: 'pairing',
-    metadata: { ...(acc?.metadata || {}), tg_phone: finalPhone, tg_step: 'code' }
-  }).eq('id', accountId);
+  await client.connect();
+  
+  let currentQR = null;
+  const qrPromise = client.signInUserWithQrCode({ apiId, apiHash }, {
+    qrCode: (qr) => {
+      // qr.token is what we need to encode or show
+      const qrUrl = `tg://login?token=${qr.token.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '')}`;
+      currentQR = qrUrl;
+    },
+    onError: (err) => logger.error('[TG-QR-ERR]', err.message)
+  });
 
-  return { step: 'code' };
+  tgSessions.set(accountId, { client, qrPromise, getQR: () => currentQR, step: 'qr' });
+  
+  // Wait a bit for the first QR
+  for (let i = 0; i < 10; i++) {
+    if (currentQR) break;
+    await new Promise(r => setTimeout(r, 500));
+  }
+
+  return { qr: currentQR };
+};
+
+export const checkTelegramQRStatus = async (accountId) => {
+  const session = tgSessions.get(accountId);
+  if (!session) return { status: 'unknown' };
+  
+  const { client, qrPromise, getQR } = session;
+  const qr = getQR ? getQR() : null;
+
+  if (await client.isUserAuthorized()) {
+    // Already logged in! Finish up
+    const sessionStr = client.session.save();
+    const me = await client.getMe();
+    const displayName = [me.firstName, me.lastName].filter(Boolean).join(' ') || me.username;
+
+    await supabase.from('accounts').update({
+      status: 'connected',
+      username: me.username || me.id?.toString(),
+      account_name: displayName,
+      metadata: { tg_session: sessionStr, tg_user_id: me.id?.toString(), tg_step: 'connected' }
+    }).eq('id', accountId);
+
+    await attachTelegramListeners(accountId, client);
+    return { status: 'connected', displayName };
+  }
+
+  return { status: 'pairing', qr };
 };
 
 /**

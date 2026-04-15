@@ -17,7 +17,9 @@ import {
   startTelegramAuth,
   verifyTelegramCode,
   restoreTelegramConnector,
-  sendTelegramMessage
+  sendTelegramMessage,
+  startTelegramQR,
+  checkTelegramQRStatus
 } from './connectors/telegram.js';
 import {
   verifyInstagramChallenge,
@@ -544,6 +546,30 @@ app.post('/api/connect/telegram/start', async (req, res) => {
     res.json({ accountId, step: 'code' });
   } catch (e) {
     logger.error('[TG-START]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Alternative : QR Code Telegram
+app.post('/api/connect/telegram/qr/start', async (req, res) => {
+  try {
+    const accountId = crypto.randomUUID();
+    await supabase.from('accounts').insert({
+      id: accountId, user_id: req.userId, platform: 'telegram', status: 'pairing'
+    });
+    const result = await startTelegramQR(accountId);
+    res.json({ accountId, qr: result.qr });
+  } catch (e) {
+    logger.error('[TG-QR-START]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/connect/telegram/qr/status/:id', async (req, res) => {
+  try {
+    const result = await checkTelegramQRStatus(req.params.id);
+    res.json(result);
+  } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
