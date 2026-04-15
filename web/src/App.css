@@ -213,6 +213,24 @@ button {
   content: "👤"; opacity: 0.3; font-size: 20px;
 }
 
+/* Media in Messages */
+.msg-media {
+  max-width: 100%;
+  max-height: 300px;
+  border-radius: 12px;
+  cursor: pointer;
+  object-fit: cover;
+  margin-bottom: 4px;
+  transition: opacity 0.2s;
+}
+.msg-media:hover { opacity: 0.85; }
+.media-caption {
+  display: block;
+  font-size: 13px;
+  margin-top: 4px;
+  opacity: 0.9;
+}
+
 /* ──────────────────────────────────────────────────────────────
    RESPONSIVE : MOBILE FIXES
    ────────────────────────────────────────────────────────────── */

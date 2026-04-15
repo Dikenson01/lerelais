@@ -261,7 +261,7 @@ export default function App() {
               </div>
               <div className="header-info">
                 <h2>{getDisplayName(selectedConv)}</h2>
-                <span className="status">WhatsApp • En ligne</span>
+                <span className="status">WhatsApp • {selectedConv.is_group && selectedConv.group_metadata?.participants ? `${selectedConv.group_metadata.participants.length} participants` : 'En ligne'}</span>
               </div>
               <div style={{marginLeft:'auto', display:'flex', gap:'12px'}}>
                 <button className="nav-item" style={{width:36, height:36}}><Phone size={18}/></button>
@@ -278,7 +278,17 @@ export default function App() {
                       <p>{msg.metadata.quoted.content}</p>
                     </div>
                   )}
-                  <span>{msg.content}</span>
+                  {msg.media_url ? (
+                    <img 
+                      src={msg.media_url} 
+                      alt={msg.media_type || 'media'}
+                      className="msg-media"
+                      onError={(e) => { e.target.style.display = 'none'; }}
+                      onClick={() => window.open(msg.media_url, '_blank')}
+                    />
+                  ) : null}
+                  {(!msg.media_url && msg.content) ? <span>{msg.content}</span> : null}
+                  {(msg.media_url && msg.content && !msg.content.startsWith('[')) ? <span className="media-caption">{msg.content}</span> : null}
                   {msg.metadata?.reactions && (
                     <div style={{display:'flex', gap:2, marginTop:4}}>
                       {Object.values(msg.metadata.reactions).map((emoji, i) => (

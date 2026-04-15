@@ -517,38 +517,64 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
             }
           }
 
-          // 2. Découverte des Groupes
+          // 2. Découverte des Groupes + Stockage des Participants
           try {
             const groups = await sock.groupFetchAllParticipating();
             for (const [jid, group] of Object.entries(groups)) {
-              await getOrCreateUnifiedConversation(jid, group.subject, true);
+              const convId = await getOrCreateUnifiedConversation(jid, group.subject, true);
+              if (convId && group.participants) {
+                await supabase.from('conversations').update({
+                  group_metadata: {
+                    participants: group.participants.map(p => ({
+                      id: p.id, admin: p.admin || null
+                    })),
+                    description: group.desc || '',
+                    owner: group.owner || null,
+                    size: group.size || group.participants.length
+                  }
+                }).eq('id', convId);
+              }
             }
+            logger.info(`[WA-GROUPS] Synced ${Object.keys(groups).length} groups with participants`);
           } catch (e) {
             logger.error(`[WA-GROUP-FETCH-ERR] ${e.message}`);
           }
 
-          // 3. Scan photos de profil (par lot, progressif)
-          const { data: contacts } = await supabase.from('contacts').select('id, external_id')
-            .is('avatar_url', null)
-            .eq('account_id', accountId)
-            .not('external_id', 'like', '%@lid');
+          // 3. Scan photos de profil (par lot, progressif, avec retry)
+          const scanAvatars = async () => {
+            const { data: contacts } = await supabase.from('contacts').select('id, external_id')
+              .is('avatar_url', null)
+              .eq('account_id', accountId)
+              .not('external_id', 'like', '%@lid')
+              .not('external_id', 'like', '%@g.us');
 
-          if (contacts && contacts.length > 0) {
-            logger.info(`[WA-PDP] Fetching ${contacts.length} profile photos (permanent storage)...`);
-            for (const contact of contacts) {
-              try {
-                const cdnUrl = await sock.profilePictureUrl(contact.external_id, 'image').catch(() => null);
-                if (cdnUrl) {
-                  const permanentUrl = await downloadAndStoreAvatar(contact.id, cdnUrl);
-                  if (permanentUrl) {
-                    await supabase.from('contacts').update({ avatar_url: permanentUrl }).eq('id', contact.id);
+            if (contacts && contacts.length > 0) {
+              logger.info(`[WA-PDP] Fetching ${contacts.length} profile photos...`);
+              let fetched = 0;
+              for (const contact of contacts) {
+                try {
+                  const cdnUrl = await sock.profilePictureUrl(contact.external_id, 'image').catch(() => null);
+                  if (cdnUrl) {
+                    const permanentUrl = await downloadAndStoreAvatar(contact.id, cdnUrl);
+                    if (permanentUrl) {
+                      await supabase.from('contacts').update({ avatar_url: permanentUrl }).eq('id', contact.id);
+                      fetched++;
+                    }
                   }
-                }
-                await delay(800);
-              } catch (e) {}
+                  await delay(1500); // Rate-limit protection
+                } catch (e) {}
+              }
+              logger.info(`[WA-PDP] Fetched ${fetched}/${contacts.length} avatars.`);
+              
+              // Retry remaining avatars in 5 minutes
+              const remaining = contacts.length - fetched;
+              if (remaining > 0 && _sock) {
+                logger.info(`[WA-PDP] Scheduling retry for ${remaining} missing avatars in 5min...`);
+                setTimeout(scanAvatars, 300000);
+              }
             }
-            logger.info('[WA-PDP] Profile photo scan complete.');
-          }
+          };
+          await scanAvatars();
 
           logger.info('[WA-MAINTENANCE] Post-connection maintenance finished.');
         }, 30000); // Démarrer 30s après connexion
@@ -601,12 +627,12 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
       }
     });
 
-    // --- SYNC HISTORIQUE COMPLET ---
+    // --- SYNC HISTORIQUE COMPLET (AUDIT FIX v2) ---
     sock.ev.on('messaging-history.set', async ({ chats, contacts: syncContacts, messages, isLatest }) => {
       try {
         logger.info(`[WA] Full Sync: ${chats?.length || 0} chats, ${syncContacts?.length || 0} contacts, ${messages?.length || 0} messages`);
 
-        // 1. Sync Contacts
+        // 1. Sync Contacts — avec résolution des noms
         if (syncContacts) {
           for (const contact of syncContacts) {
             const jid = jidNormalizedUser(contact.id);
@@ -638,10 +664,11 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
             const convId = await getOrCreateUnifiedConversation(jid, chat.name, isGroup);
             if (convId) {
               jidToConvId[jid] = convId;
-              // Mettre à jour l'état archivé lors de la sync
+              // Mettre à jour timestamp + état archivé
+              const { data: existing } = await supabase.from('conversations').select('metadata').eq('id', convId).maybeSingle();
               await supabase.from('conversations')
                 .update({ 
-                  metadata: { is_archived: chat.archived === true },
+                  metadata: { ...(existing?.metadata || {}), is_archived: chat.archived === true },
                   last_message_at: lastMsgAt || new Date()
                 })
                 .eq('id', convId);
@@ -649,10 +676,10 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
           }
         }
 
-        // 3. Sync Messages Historiques
+        // 3. Sync Messages Historiques — AVEC téléchargement des médias
         if (messages && messages.length > 0) {
-          // Trier les messages par conversation pour trouver le dernier
           const latestByJid = {};
+          const mediaQueue = []; // File d'attente pour téléchargement en arrière-plan
           
           for (const msg of messages) {
             if (!msg.message) continue;
@@ -667,9 +694,24 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
             const mediaInfo = getMediaInfo(msg.message);
             const convId = jidToConvId[jid] || await getOrCreateUnifiedConversation(jid, msg.pushName, jid.endsWith('@g.us'));
 
+            // FIX 2: Résoudre les noms via pushName si le contact est un numéro brut
+            if (msg.pushName && !msg.key.fromMe) {
+              const senderId = msg.key.participant || jid;
+              const { data: existingContact } = await supabase.from('contacts')
+                .select('id, display_name').eq('account_id', accountId).eq('external_id', senderId).maybeSingle();
+              if (existingContact) {
+                const currentName = existingContact.display_name;
+                // Si le nom actuel est un numéro brut, le mettre à jour avec le pushName
+                if (currentName && /^\d+$/.test(currentName.replace(/[+\s-]/g, '')) && msg.pushName !== currentName) {
+                  await supabase.from('contacts').update({ display_name: msg.pushName }).eq('id', existingContact.id);
+                }
+              }
+            }
+
             if (convId) {
               const content = extractContent(msg.message);
-              await supabase.from('messages').upsert({
+              // FIX 1 & 3: Ne plus ignorer les doublons pour pouvoir patcher les previews
+              const { data: inserted } = await supabase.from('messages').upsert({
                 conversation_id: convId,
                 account_id: accountId,
                 remote_id: msg.key.id,
@@ -680,26 +722,56 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
                 timestamp: new Date(ts || Date.now()),
                 metadata: {
                   has_media: !!mediaInfo,
-                  participant: msg.key.participant || null
+                  participant: msg.key.participant || null,
+                  pushName: msg.pushName || null
                 }
-              }, { onConflict: 'remote_id', ignoreDuplicates: true });
+              }, { onConflict: 'remote_id' }).select('id').maybeSingle();
+
+              // FIX 1: Si c'est un média, ajouter à la file de téléchargement
+              if (mediaInfo && inserted?.id) {
+                mediaQueue.push({ msg, remoteId: msg.key.id });
+              }
             }
           }
 
-          // 4. Mettre à jour les PREVIEWS des conversations après l'ingestion des messages
+          // 4. Mettre à jour les PREVIEWS des conversations
           for (const [jid, data] of Object.entries(latestByJid)) {
             const convId = jidToConvId[jid];
             if (convId) {
               const mediaInfo = getMediaInfo(data.msg.message);
               const content = extractContent(data.msg.message);
               const preview = content || (mediaInfo ? `📷 ${mediaInfo.type.charAt(0).toUpperCase() + mediaInfo.type.slice(1)}` : '');
+              const realTs = new Date(data.ts || Date.now());
               
+              // FIX 3 & 6: Toujours écrire la preview et utiliser le vrai timestamp
               await supabase.from('conversations').update({
-                last_message_preview: preview
+                last_message_preview: preview,
+                last_message_at: realTs
               }).eq('id', convId);
             }
           }
           logger.info(`[WA-SYNC] Previews and messages synced for ${Object.keys(latestByJid).length} chats`);
+
+          // 5. Téléchargement des médias en arrière-plan (non bloquant)
+          if (mediaQueue.length > 0) {
+            logger.info(`[WA-MEDIA-QUEUE] Starting background download of ${mediaQueue.length} media files...`);
+            (async () => {
+              let downloaded = 0;
+              for (const item of mediaQueue) {
+                try {
+                  const mediaUrl = await downloadAndStoreMedia(item.msg);
+                  if (mediaUrl) {
+                    await supabase.from('messages').update({ media_url: mediaUrl }).eq('remote_id', item.remoteId);
+                    downloaded++;
+                  }
+                  await delay(500); // Throttle pour ne pas surcharger
+                } catch (e) {
+                  logger.error(`[WA-MEDIA-QUEUE] Failed for ${item.remoteId}: ${e.message}`);
+                }
+              }
+              logger.info(`[WA-MEDIA-QUEUE] Downloaded ${downloaded}/${mediaQueue.length} media files.`);
+            })();
+          }
         }
       } catch (e) {
         logger.error(`[WA-SYNC-ERR] messaging-history.set: ${e.message}`, e);
