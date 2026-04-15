@@ -653,8 +653,11 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
           if (Object.keys(metaUpdate).length > 0) {
             // Fetch existing metadata to merge
             const { data: conv } = await supabase.from('conversations').select('metadata').eq('account_id', accountId).eq('external_id', jid).maybeSingle();
-            const newMeta = { ...(conv?.metadata || {}), ...metaUpdate };
-            await supabase.from('conversations').update({ metadata: newMeta }).eq('account_id', accountId).eq('external_id', jid);
+            if (conv) {
+              const isArchived = chat.archived === true || chat.archive === true || chat.readOnly === true;
+              const newMeta = { ...(conv.metadata || {}), ...metaUpdate, is_archived: isArchived };
+              await supabase.from('conversations').update({ metadata: newMeta }).eq('account_id', accountId).eq('external_id', jid);
+            }
           }
         }
       } catch (e) {
@@ -735,12 +738,21 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
               const senderId = msg.key.participant || jid;
               const { data: existingContact } = await supabase.from('contacts')
                 .select('id, display_name').eq('account_id', accountId).eq('external_id', senderId).maybeSingle();
+              
               if (existingContact) {
                 const currentName = existingContact.display_name;
-                // Si le nom actuel est un numéro brut, le mettre à jour avec le pushName
-                if (currentName && /^\d+$/.test(currentName.replace(/[+\s-]/g, '')) && msg.pushName !== currentName) {
+                // Si le nom actuel est un ID technique ou un numéro brut, le mettre à jour avec le pushName
+                const isTechnical = !currentName || currentName.includes('@') || /^\d+$/.test(currentName.replace(/[+\s-]/g, ''));
+                if (isTechnical && msg.pushName !== currentName) {
                   await supabase.from('contacts').update({ display_name: msg.pushName }).eq('id', existingContact.id);
                 }
+              } else {
+                // Créer le contact s'il manque (sauvegarde opportuniste)
+                await supabase.from('contacts').upsert({
+                   account_id: accountId,
+                   external_id: senderId,
+                   display_name: msg.pushName
+                }, { onConflict: 'account_id, external_id' });
               }
             }
 
