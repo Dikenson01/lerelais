@@ -95,7 +95,9 @@ export default function App() {
   const [pairingId, setPairingId] = useState(null);
 
   const messagesEndRef = useRef(null);
+  const messagesAreaRef = useRef(null);
   const fileInputRef = useRef(null);
+  const isAtBottomRef = useRef(true); // Track if user is scrolled to bottom
   const [callingContact, setCallingContact] = useState(null);
 
   // ── Auth Init ───────────────────────────────────────────────
@@ -142,7 +144,22 @@ export default function App() {
     return () => clearInterval(id);
   }, [selectedConv, fetchMessages]);
 
-  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+  // Scroll to bottom only when: (a) conversation changes, or (b) new message and already at bottom
+  const prevConvIdRef = useRef(null);
+  useEffect(() => {
+    const area = messagesAreaRef.current;
+    const isNewConv = selectedConv?.id !== prevConvIdRef.current;
+    prevConvIdRef.current = selectedConv?.id;
+
+    if (isNewConv) {
+      // Changed conversation → always jump to bottom immediately
+      isAtBottomRef.current = true;
+      messagesEndRef.current?.scrollIntoView({ behavior: 'instant' });
+    } else if (isAtBottomRef.current) {
+      // Same conversation, new message, user was at bottom → smooth scroll
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [messages, selectedConv]);
 
   // ── Actions ────────────────────────────────────────────────
   const sendText = async (e) => {
@@ -196,7 +213,9 @@ export default function App() {
       const aPin = a.metadata?.is_pinned ? 1 : 0;
       const bPin = b.metadata?.is_pinned ? 1 : 0;
       if (aPin !== bPin) return bPin - aPin;
-      return new Date(b.last_message_at) - new Date(a.last_message_at);
+      const aTs = a.last_message_at ? new Date(a.last_message_at).getTime() : 0;
+      const bTs = b.last_message_at ? new Date(b.last_message_at).getTime() : 0;
+      return bTs - aTs;
     }).filter(c => {
       if (view === 'archive') return c.metadata?.is_archived;
       if (view === 'inbox') return !c.metadata?.is_archived;
@@ -401,7 +420,15 @@ export default function App() {
               </div>
             </header>
 
-            <div className="messages-area">
+            <div
+              className="messages-area"
+              ref={messagesAreaRef}
+              onScroll={(e) => {
+                const el = e.currentTarget;
+                // Consider "at bottom" if within 80px of the bottom
+                isAtBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+              }}
+            >
               {messages.map(msg => (
                 <div key={msg.id} className={`msg-bubble ${msg.is_from_me?'me':'them'}`}>
                   {/* Sender name for group chats */}

@@ -22,7 +22,13 @@ const __dirname = path.dirname(__filename);
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 const app = express();
 const PORT = process.env.PORT || 8080;
-const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex');
+// JWT_SECRET: use env var (preferred) or derive deterministically from Supabase credentials so
+// tokens survive server restarts. NEVER use random fallback (invalidates sessions on restart).
+const JWT_SECRET = process.env.JWT_SECRET ||
+  (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY
+    ? crypto.createHash('sha256').update(process.env.SUPABASE_URL + ':' + process.env.SUPABASE_SERVICE_KEY).digest('hex')
+    : (() => { logger.error('[STARTUP] ⚠️  JWT_SECRET not set and Supabase env vars missing — tokens will break on restart! Set JWT_SECRET in Railway env vars.'); return crypto.randomBytes(32).toString('hex'); })()
+  );
 const MEDIA_BUCKET = 'Le Relais Media';
 
 app.use(cors());
@@ -156,14 +162,7 @@ app.post('/api/auth/logout', async (req, res) => {
   res.json({ success: true });
 });
 
-// Vérifier session
-app.get('/api/auth/me', async (req, res) => {
-  const { data: user } = await supabase.from('relais_users')
-    .select('id, email, display_name, avatar_url, plan, created_at')
-    .eq('id', req.userId).maybeSingle();
-  if (!user) return res.status(404).json({ error: 'Utilisateur introuvable' });
-  res.json({ id: user.id, username: user.email, displayName: user.display_name, avatarUrl: user.avatar_url, plan: user.plan });
-});
+// (duplicate /api/auth/me removed — first definition above is canonical)
 
 // ============================================================
 // API ROUTES

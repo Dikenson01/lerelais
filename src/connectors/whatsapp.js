@@ -603,7 +603,7 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
 
           // 4. Scan noms de groupes et participants (Identity Recovery V9)
           const scanGroupsNames = async () => {
-             const { data: grps } = await supabase.from('conversations').select('external_id').eq('is_group', true);
+             const { data: grps } = await supabase.from('conversations').select('external_id').eq('account_id', accountId).eq('is_group', true);
              if (grps) {
                logger.info(`[WA-IDENTITY] Explicitly fetching metadata for ${grps.length} groups...`);
                for (const g of grps) {
@@ -721,7 +721,7 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
             // Fetch existing metadata to merge
             const { data: conv } = await supabase.from('conversations').select('metadata').eq('account_id', accountId).eq('external_id', jid).maybeSingle();
             if (conv) {
-              const isArchived = chat.archived === true || chat.archive === true || chat.readOnly === true || (chat.metadata?.is_archived === true);
+              const isArchived = update.archived === true || update.archive === true || update.readOnly === true || (conv.metadata?.is_archived === true);
               const newMeta = { ...(conv.metadata || {}), ...metaUpdate, is_archived: isArchived };
               await supabase.from('conversations').update({ metadata: newMeta }).eq('account_id', accountId).eq('external_id', jid);
             }
@@ -869,6 +869,24 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
             }
           }
           logger.info(`[WA-SYNC] Previews and messages synced for ${Object.keys(latestByJid).length} chats`);
+
+          // Réinitialiser le timestamp "requested_at" pour les conversations qui ont reçu des messages
+          // → le cascade worker pourra les re-demander pour obtenir encore plus d'historique
+          for (const jid of Object.keys(latestByJid)) {
+            const convId = jidToConvId[jid];
+            if (convId) {
+              const { data: existConv } = await supabase.from('conversations').select('metadata').eq('id', convId).maybeSingle();
+              if (existConv && !existConv.metadata?.history_sync_complete) {
+                await supabase.from('conversations').update({
+                  metadata: {
+                    ...(existConv.metadata || {}),
+                    history_sync_requested_at: null, // Permet une nouvelle demande
+                    history_sync_attempts: 0          // Reset le compteur
+                  }
+                }).eq('id', convId);
+              }
+            }
+          }
 
           // 5. Téléchargement des médias en arrière-plan (non bloquant)
           if (mediaQueue.length > 0) {
@@ -1019,9 +1037,10 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
 
         // Mettre à jour la preview de la conversation
         const preview = content || (mediaInfo ? `📷 ${mediaInfo.type.charAt(0).toUpperCase() + mediaInfo.type.slice(1)}` : '');
+        const realMsgTs = new Date((msg.messageTimestamp?.low || msg.messageTimestamp || Date.now() / 1000) * 1000);
         await supabase.from('conversations').update({
           last_message_preview: preview,
-          last_message_at: new Date()
+          last_message_at: realMsgTs
         }).eq('id', convId);
 
         if (!isFromMe) {
@@ -1051,118 +1070,116 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
       }
     });
     // --- WORKER DE SYNC EN CASCADE (HISTORIQUE ANCIEN) ---
-    const processHistoryBatch = async (jid) => {
-      if (!sock) return;
-      try {
-        // 1. Trouver le message le plus ancien dans notre DB pour cette conv
-        const { data: oldestDbMsg } = await supabase.from('messages')
-          .select('timestamp, remote_id')
-          .eq('account_id', accountId)
-          .eq('sender_id', jid.endsWith('@g.us') ? undefined : jid) // Filter by conv jid generally
-          .order('timestamp', { ascending: true })
-          .limit(1)
-          .maybeSingle();
-
-        // Plus robuste : récupérer la conversation pour avoir le curseur stocké
-        const { data: conv } = await supabase.from('conversations')
-          .select('id, metadata')
-          .eq('account_id', accountId)
-          .eq('external_id', jid)
-          .single();
-
-        if (conv?.metadata?.history_sync_complete) return;
-
-        const cursorMsgId = conv.metadata?.oldest_msg_id || oldestDbMsg?.remote_id;
-        const limit = 100;
-
-        logger.info(`[WA-CASCADE-SYNC] Fetching history for ${jid} (cursor: ${cursorMsgId || 'START'})`);
-        
-        // fetchMessageHistory est l'API Baileys pour remonter le temps
-        // NOTE: Baileys peut rejeter si le cursor n'est pas formaté correctement
-        const messages = await sock.fetchMessageHistory(jid, limit, cursorMsgId ? { id: cursorMsgId, fromMe: false } : undefined)
-          .catch(e => {
-            logger.warn(`[WA-CASCADE-SYNC] Failed with cursor ${cursorMsgId}, retrying without cursor...`);
-            return sock.fetchMessageHistory(jid, limit);
-          });
-
-        if (!messages || messages.length === 0) {
-          logger.info(`[WA-CASCADE-SYNC] ${jid} finalized. No more history.`);
-          await supabase.from('conversations').update({
-            metadata: { ...conv.metadata, history_sync_complete: true }
-          }).eq('id', conv.id);
-          return;
-        }
-
-        // Insérer les messages récupérés
-        for (const msg of messages) {
-          if (!msg.message) continue;
-          const ts = (msg.messageTimestamp?.low || msg.messageTimestamp || 0) * 1000;
-          const mediaInfo = getMediaInfo(msg.message);
-          const isGroupMsg = jid.endsWith('@g.us');
-          const finalSenderId = msg.key.fromMe ? accountId : (isGroupMsg ? (msg.key.participant || jid) : jid);
-
-          await supabase.from('messages').upsert({
-            conversation_id: conv.id,
-            account_id: accountId,
-            remote_id: msg.key.id,
-            sender_id: finalSenderId,
-            content: extractContent(msg.message) || (mediaInfo ? `[${mediaInfo.type}]` : ''),
-            media_type: mediaInfo?.type || null,
-            is_from_me: msg.key.fromMe || false,
-            timestamp: new Date(ts || Date.now()),
-            metadata: {
-              has_media: !!mediaInfo,
-              participant: isGroupMsg ? (msg.key.participant || null) : null,
-              pushName: msg.pushName || null,
-              is_history: true
-            }
-          }, { onConflict: 'remote_id' });
-        }
-
-        // Mettre à jour le curseur (le plus ancien de ce batch)
-        const newOldest = messages[messages.length - 1]; // Baileys retourne généralement du plus récent au plus ancien
-        await supabase.from('conversations').update({
-          metadata: { ...conv.metadata, oldest_msg_id: newOldest.key.id }
-        }).eq('id', conv.id);
-
-        logger.info(`[WA-CASCADE-SYNC] ${jid}: inserted ${messages.length} messages.`);
-      } catch (e) {
-        logger.error(`[WA-CASCADE-SYNC-ERR] ${jid}: ${e.message}`);
-      }
-    };
+    // NOTE: sock.fetchMessageHistory() dans Baileys v7 ne retourne PAS les messages directement.
+    // Il envoie une requête WA qui déclenche un événement messaging-history.set.
+    // Ce worker demande l'historique et le gestionnaire messaging-history.set s'occupe du reste.
 
     const startHistoryCascadeWorker = async () => {
       if (!sock) return;
       logger.info('[WA-CASCADE-SYNC] Starting background history worker...');
-      
-      while (sock) {
+
+      const MAX_ITERATIONS = 50;
+      let iteration = 0;
+
+      while (sock && iteration < MAX_ITERATIONS) {
+        iteration++;
         try {
-          // Trouver les conversations qui ont besoin de sync
-          // Utilisation de NOT logic plus permissive pour attraper Metadata NULL ou flag manquant
+          // Trouver les conversations qui n'ont pas encore été demandées (ou dont la demande est ancienne)
+          const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+
           const { data: convs } = await supabase.from('conversations')
-            .select('external_id, metadata')
+            .select('id, external_id, metadata')
             .eq('account_id', accountId)
             .or('metadata->history_sync_complete.is.null,metadata->history_sync_complete.eq.false')
             .order('last_message_at', { ascending: false })
-            .limit(10);
+            .limit(5);
 
           if (!convs || convs.length === 0) {
-            logger.info('[WA-CASCADE-SYNC] All histories complete.');
+            logger.info('[WA-CASCADE-SYNC] All histories complete. Worker stopping.');
             break;
           }
 
-          for (const conv of convs) {
-            await processHistoryBatch(conv.external_id);
-            await delay(1500); // Respecter le délai de sécurité demandé
+          // Filtrer celles qui ont déjà été demandées récemment (eviter le spam)
+          const toProcess = convs.filter(c => {
+            const lastReq = c.metadata?.history_sync_requested_at;
+            if (!lastReq) return true; // Jamais demandée
+            return new Date(lastReq) < new Date(fiveMinAgo); // Demandée il y a > 5min
+          });
+
+          if (toProcess.length === 0) {
+            // Toutes les conv ont déjà été demandées récemment, attendre
+            logger.info('[WA-CASCADE-SYNC] All pending convs requested recently. Waiting 2min...');
+            await delay(120000);
+            continue;
           }
+
+          for (const conv of toProcess) {
+            if (!sock) break;
+
+            // Trouver le message le plus ancien pour construire le cursor
+            const { data: oldestMsg } = await supabase.from('messages')
+              .select('remote_id, timestamp')
+              .eq('conversation_id', conv.id)
+              .order('timestamp', { ascending: true })
+              .limit(1)
+              .maybeSingle();
+
+            const { count: msgCount } = await supabase.from('messages')
+              .select('id', { count: 'exact', head: true })
+              .eq('conversation_id', conv.id);
+
+            logger.info(`[WA-CASCADE-SYNC] Requesting history for ${conv.external_id} (${msgCount || 0} msgs, cursor: ${oldestMsg?.remote_id || 'none'})`);
+
+            try {
+              // Construire le cursor Baileys: objet WAMessage minimal
+              const cursor = oldestMsg ? {
+                key: {
+                  id: oldestMsg.remote_id,
+                  remoteJid: conv.external_id,
+                  fromMe: false
+                },
+                messageTimestamp: Math.floor(new Date(oldestMsg.timestamp).getTime() / 1000)
+              } : undefined;
+
+              // fetchMessageHistory envoie une requête WA.
+              // Les messages arrivent ensuite via l'événement messaging-history.set
+              await sock.fetchMessageHistory(50, cursor, cursor?.messageTimestamp).catch(e => {
+                logger.warn(`[WA-CASCADE-SYNC] fetchMessageHistory for ${conv.external_id}: ${e.message}`);
+              });
+            } catch (e) {
+              logger.error(`[WA-CASCADE-SYNC-ERR] ${conv.external_id}: ${e.message}`);
+            }
+
+            // Marquer comme "demandée" pour éviter les requêtes en boucle
+            const attempts = (conv.metadata?.history_sync_attempts || 0) + 1;
+            const newMeta = {
+              ...(conv.metadata || {}),
+              history_sync_requested_at: new Date().toISOString(),
+              history_sync_attempts: attempts
+            };
+
+            // Après 10 tentatives sans messages, abandonner pour cette conversation
+            if (attempts >= 10) {
+              newMeta.history_sync_complete = true;
+              logger.info(`[WA-CASCADE-SYNC] ${conv.external_id}: max attempts reached, marking complete.`);
+            }
+
+            await supabase.from('conversations').update({ metadata: newMeta }).eq('id', conv.id);
+            await delay(3000); // 3s entre chaque requête pour respecter les limites WA
+          }
+
+          // Pause entre les batches pour laisser messaging-history.set traiter les résultats
+          await delay(30000);
         } catch (e) {
           logger.error(`[WA-CASCADE-SYNC-LOOP] ${e.message}`);
-          await delay(5000);
+          await delay(10000);
         }
       }
+
+      logger.info('[WA-CASCADE-SYNC] Worker finished.');
     };
 
-    // startHistoryCascadeWorker(); // Retiré d'ici pour être mis dans le hook de maintenance
+    // startHistoryCascadeWorker(); // Appelé depuis connection.update → open
   };
 
   await startSocket();
