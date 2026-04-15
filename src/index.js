@@ -431,8 +431,9 @@ app.post('/api/connect/whatsapp', async (req, res) => {
     
     if (reuseable) {
       accountId = reuseable.id;
-      logger.info(`[WA-INIT] Reusing existing account ID: ${accountId}`);
-      // Reset status to pairing for fresh connection
+      logger.info(`[WA-INIT] Reusing account ${accountId}. Wiping stale session for instant QR...`);
+      // Wipe ONLY active session files (namespace 'wa_session') to force fresh QR
+      await supabase.from('account_sessions').delete().eq('account_id', accountId).eq('namespace', 'wa_session');
       await supabase.from('accounts').update({ status: 'pairing' }).eq('id', accountId);
     } else {
       accountId = crypto.randomUUID();
