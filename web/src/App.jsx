@@ -287,7 +287,12 @@ export default function App() {
                       onClick={() => window.open(msg.media_url, '_blank')}
                     />
                   ) : null}
-                  {(!msg.media_url && msg.content) ? <span>{msg.content}</span> : null}
+                  {msg.content && !msg.content.startsWith('[') ? <span>{msg.content}</span> : null}
+                  {!msg.media_url && msg.media_type ? (
+                    <span style={{opacity:0.65, fontStyle:'italic'}}>
+                      {{'image':'📷 Photo', 'video':'🎬 Vidéo', 'audio':'🎵 Audio', 'document':'📄 Document', 'sticker':'🎭 Sticker'}[msg.media_type] || '📎 Média'}
+                    </span>
+                  ) : null}
                   {(msg.media_url && msg.content && !msg.content.startsWith('[')) ? <span className="media-caption">{msg.content}</span> : null}
                   {msg.metadata?.reactions && (
                     <div style={{display:'flex', gap:2, marginTop:4}}>

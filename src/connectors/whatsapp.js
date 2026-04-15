@@ -582,6 +582,7 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
     });
 
     sock.ev.on('chats.upsert', async (chats) => {
+      const icons = { image: '📷 Photo', video: '🎬 Vidéo', audio: '🎵 Audio', document: '📄 Document', sticker: '🎭 Sticker' };
       for (const chat of chats) {
         const jid = jidNormalizedUser(chat.id);
         const isGroup = jid.endsWith('@g.us');
@@ -589,20 +590,32 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
           ? new Date(Number(chat.conversationTimestamp) * 1000)
           : new Date();
 
-        await supabase.from('conversations').upsert({
+        // Tenter d'extraire la preview depuis le dernier message du chat
+        let preview = null;
+        const lastMsgObj = chat.messages?.array?.[0]?.message || chat.messages?.get?.(0)?.message;
+        if (lastMsgObj) {
+          const lastContent = extractContent(lastMsgObj);
+          const lastMedia = getMediaInfo(lastMsgObj);
+          preview = lastContent || (lastMedia ? icons[lastMedia.type] || '📎 Média' : null);
+        }
+
+        const upsertData = {
           account_id: accountId,
           external_id: jid,
           platform: 'whatsapp',
           title: chat.name || jid.split('@')[0],
           is_group: isGroup,
           unread_count: chat.unreadCount || 0,
-          metadata: { 
+          metadata: {
             is_archived: chat.archived === true,
             is_pinned: (chat.pin && chat.pin > 0) || false,
             is_muted: chat.mute !== undefined && chat.mute !== null
           },
           last_message_at: lastMsgAt
-        }, { onConflict: 'account_id, external_id' });
+        };
+        if (preview) upsertData.last_message_preview = preview;
+
+        await supabase.from('conversations').upsert(upsertData, { onConflict: 'account_id, external_id' });
       }
     });
 
