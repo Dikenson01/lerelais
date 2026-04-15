@@ -85,8 +85,11 @@ export const verifyTelegramCode = async (accountId, code, password2fa = null) =>
   const { client, phone, phoneCodeHash } = session;
 
   try {
-    await client.signIn({ apiId: getApiCredentials().apiId, apiHash: getApiCredentials().apiHash },
-      { phoneNumber: phone, phoneCodeHash, phoneCode: code });
+    await client.signIn({
+      phoneNumber: phone,
+      phoneCodeHash,
+      phoneCode: code
+    });
   } catch (err) {
     if (err.message?.includes('SESSION_PASSWORD_NEEDED') || err.errorMessage === 'SESSION_PASSWORD_NEEDED') {
       if (!password2fa) {
