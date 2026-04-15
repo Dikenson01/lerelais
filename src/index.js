@@ -418,22 +418,29 @@ app.post('/api/conversations/:id/archive', async (req, res) => {
 // ============================================================
 
 app.post('/api/connect/whatsapp', async (req, res) => {
-  // Nettoyer les sessions pairing orphelines de cet utilisateur
-  const { data: userAccounts } = await supabase.from('accounts').select('id').eq('user_id', req.userId);
-  if (userAccounts?.length) {
-    await supabase.from('accounts').delete()
-      .in('id', userAccounts.map(a => a.id))
-      .eq('status', 'pairing');
-  }
+  try {
+    const { data: userAccounts } = await supabase.from('accounts').select('id, status').eq('user_id', req.userId).eq('platform', 'whatsapp');
+    
+    // 1. Check if already connected via active connector
+    const existingActive = userAccounts?.find(a => activeConnectors[a.id]);
+    if (existingActive) return res.json({ accountId: existingActive.id });
 
-  // Vérifier si déjà connecté
-  const existing = userAccounts?.find(a => activeConnectors[a.id]);
-  if (existing) return res.json({ accountId: existing.id });
+    // 2. Reuse EXISTING disconnected/pairing account if it exists
+    let accountId;
+    const reuseable = userAccounts?.[0]; // Grab the first one (should be unique by platform)
+    
+    if (reuseable) {
+      accountId = reuseable.id;
+      logger.info(`[WA-INIT] Reusing existing account ID: ${accountId}`);
+      // Reset status to pairing for fresh connection
+      await supabase.from('accounts').update({ status: 'pairing' }).eq('id', accountId);
+    } else {
+      accountId = crypto.randomUUID();
+      logger.info(`[WA-INIT] Creating NEW account ID: ${accountId}`);
+      await supabase.from('accounts').insert({ id: accountId, user_id: req.userId, platform: 'whatsapp', status: 'pairing' });
+    }
 
-  const accountId = crypto.randomUUID();
-  await supabase.from('accounts').insert({ id: accountId, user_id: req.userId, platform: 'whatsapp', status: 'pairing' });
-
-  const connector = await createWhatsAppConnector(accountId, (type, payload) => {
+    const connector = await createWhatsAppConnector(accountId, (type, payload) => {
     if (type === 'qr') {
       qrMap.set(accountId, payload);
     } else if (type === 'status') {
