@@ -599,7 +599,7 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
               }
             }
           };
-          await scanAvatars();
+          scanAvatars(); // Lancer en arrière-plan SANS await (1000 contacts × 1.5s = ~25min sinon)
 
           // 4. Scan noms de groupes et participants (Identity Recovery V9)
           const scanGroupsNames = async () => {
