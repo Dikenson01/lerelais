@@ -62,8 +62,8 @@ const qrMap = new Map();
 // ============================================================
 
 const requireAuth = async (req, res, next) => {
-  // Routes publiques
-  if (req.path.startsWith('/auth/')) return next();
+  // Routes publiques (uniquement login et register)
+  if (req.path === '/auth/login' || req.path === '/auth/register') return next();
 
   const authHeader = req.headers['authorization'];
   if (!authHeader?.startsWith('Bearer ')) {
@@ -487,9 +487,31 @@ app.get('/api/connect/whatsapp/status/:id', async (req, res) => {
 });
 
 app.delete('/api/accounts/:id', async (req, res) => {
-  await supabase.from('accounts').delete().eq('id', req.params.id).eq('user_id', req.userId);
-  delete activeConnectors[req.params.id];
-  res.json({ success: true });
+  const accountId = req.params.id;
+  try {
+    logger.info(`[CLEANUP] Deleting account ${accountId} (User: ${req.userId})...`);
+    
+    // 1. Delete all related data first (cascading cleanup)
+    await supabase.from('messages').delete().eq('account_id', accountId);
+    await supabase.from('conversations').delete().eq('account_id', accountId);
+    await supabase.from('contacts').delete().eq('account_id', accountId);
+    await supabase.from('account_sessions').delete().eq('account_id', accountId);
+    
+    // 2. Shut down active connector
+    if (activeConnectors[accountId]) {
+      try { await activeConnectors[accountId].disconnect(); } catch(e){}
+      delete activeConnectors[accountId];
+    }
+    
+    // 3. Delete the account record
+    const { error } = await supabase.from('accounts').delete().eq('id', accountId).eq('user_id', req.userId);
+    if (error) throw error;
+
+    res.json({ success: true });
+  } catch (err) {
+    logger.error(`[CLEANUP-ERR] ${err.message}`);
+    res.status(500).json({ error: 'Échec de la suppression complète du compte' });
+  }
 });
 
 // ============================================================

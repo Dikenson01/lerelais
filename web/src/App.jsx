@@ -900,7 +900,7 @@ export default function App() {
 
                  <button
                    className="lx-btn"
-                   style={{background:'var(--surface-300)', border:'1px solid var(--border-muted)'}}
+                   style={{background:'var(--surface-300)', border:'1px solid var(--border-muted)', color:'white'}}
                    onClick={() => {
                      const fakeConv = { contacts: [selectedContactDetail], external_id: selectedContactDetail.external_id, title: getContactName(selectedContactDetail) };
                      startCall(fakeConv);

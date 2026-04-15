@@ -30,6 +30,17 @@ export const startTelegramAuth = async (accountId, phoneNumber) => {
     throw new Error('TELEGRAM_API_ID / TELEGRAM_API_HASH manquants dans les variables Railway');
   }
 
+  // Auto-format French numbers (07... -> +337...)
+  let cleanPhone = phoneNumber.replace(/\D/g, '');
+  if (cleanPhone.startsWith('0') && cleanPhone.length === 10) {
+    cleanPhone = '33' + cleanPhone.slice(1);
+  } else if (!cleanPhone.startsWith('33') && cleanPhone.length === 9) {
+    cleanPhone = '33' + cleanPhone;
+  }
+  
+  // Ensure it has a plus if it's being used as a display string, but MTProto usually wants digits only
+  const finalPhone = cleanPhone;
+
   // Restore existing session if any
   const { data: acc } = await supabase.from('accounts')
     .select('metadata').eq('id', accountId).maybeSingle();
@@ -49,15 +60,15 @@ export const startTelegramAuth = async (accountId, phoneNumber) => {
   await client.connect();
 
   // Send code
-  const { phoneCodeHash } = await client.sendCode({ apiId, apiHash }, phoneNumber.replace(/\D/g, ''));
+  const { phoneCodeHash } = await client.sendCode({ apiId, apiHash }, finalPhone);
 
-  tgSessions.set(accountId, { client, phone: phoneNumber.replace(/\D/g, ''), phoneCodeHash, step: 'code' });
-  logger.info(`[TG] Code sent to ${phoneNumber} for account ${accountId}`);
+  tgSessions.set(accountId, { client, phone: finalPhone, phoneCodeHash, step: 'code' });
+  logger.info(`[TG] Code sent to ${finalPhone} for account ${accountId}`);
 
   // Save pairing state
   await supabase.from('accounts').update({
     status: 'pairing',
-    metadata: { ...(acc?.metadata || {}), tg_phone: phoneNumber, tg_step: 'code' }
+    metadata: { ...(acc?.metadata || {}), tg_phone: finalPhone, tg_step: 'code' }
   }).eq('id', accountId);
 
   return { step: 'code' };
