@@ -595,6 +595,38 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
           };
           await scanAvatars();
 
+          // 4. Scan noms de groupes et participants (Identity Recovery V9)
+          const scanGroupsNames = async () => {
+             const { data: grps } = await supabase.from('conversations').select('external_id').eq('is_group', true);
+             if (grps) {
+               logger.info(`[WA-IDENTITY] Explicitly fetching metadata for ${grps.length} groups...`);
+               for (const g of grps) {
+                 try {
+                   const meta = await sock.groupMetadata(g.external_id);
+                   if (meta && meta.participants) {
+                     for (const p of meta.participants) {
+                       const pj = jidNormalizedUser(p.id);
+                       // Si on a un nom (notify/pushname/name), on l'enregistre
+                       const pName = p.name || p.notify || p.verifiedName;
+                       if (pName) {
+                         await supabase.from('contacts').upsert({
+                           account_id: accountId,
+                           external_id: pj,
+                           display_name: pName,
+                           phone_number: pj.endsWith('@s.whatsapp.net') ? pj.split('@')[0] : null
+                         }, { onConflict: 'account_id, external_id' });
+                       }
+                     }
+                   }
+                   await delay(2000); // Respecter les limites WA
+                 } catch (e) {
+                    logger.warn(`[WA-IDENTITY] Failed meta for ${g.external_id}: ${e.message}`);
+                 }
+               }
+             }
+          };
+          await scanGroupsNames();
+
           logger.info('[WA-MAINTENANCE] Post-connection maintenance finished.');
           
           // Lancement de la synchronisation de l'historique en cascade
@@ -654,7 +686,7 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
             // Fetch existing metadata to merge
             const { data: conv } = await supabase.from('conversations').select('metadata').eq('account_id', accountId).eq('external_id', jid).maybeSingle();
             if (conv) {
-              const isArchived = chat.archived === true || chat.archive === true || chat.readOnly === true;
+              const isArchived = chat.archived === true || chat.archive === true || chat.readOnly === true || (chat.metadata?.is_archived === true);
               const newMeta = { ...(conv.metadata || {}), ...metaUpdate, is_archived: isArchived };
               await supabase.from('conversations').update({ metadata: newMeta }).eq('account_id', accountId).eq('external_id', jid);
             }
