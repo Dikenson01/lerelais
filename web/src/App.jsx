@@ -119,8 +119,10 @@ export default function App() {
     const t = getToken();
     if (!t) { setAuthReady(true); return; }
     axios.get(`${API}/auth/me`).then(r => { setUser(r.data); setAuthReady(true); }).catch((err) => { 
-      if (err.response?.status !== 401) { /* log error */ }
-      clearToken(); setAuthReady(true); 
+      if (err.response?.status === 404 || err.response?.status === 401) { 
+        clearToken(); setUser(null);
+      }
+      setAuthReady(true); 
     });
   }, []);
 
@@ -504,18 +506,16 @@ export default function App() {
                    : 'WhatsApp';
 
                  return (
-                 <div key={acc.id} className="conv-card" style={{background:'var(--surface-200)', marginBottom:'10px', border:'1px solid var(--border-muted)', alignItems:'center', paddingRight:'12px'}}>
-                    <div style={{width:36,height:36,borderRadius:'50%',background:platformBg,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+                 <div key={acc.id} className="acc-row" style={{background:'var(--surface-200)', marginBottom:'12px', border:'1px solid var(--border-muted)', borderRadius:16, display:'flex', alignItems:'center', padding:'12px 16px', gap:12}}>
+                    <div style={{width:40,height:40,borderRadius:'50%',background:platformBg,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
                       {platformIcon}
                     </div>
-                    <div className="conv-content">
-                      <strong>{acc.account_name || acc.username || platformName}</strong>
-                      <p style={{color: statusColor, fontSize:'12px'}}>{statusLabel}</p>
+                    <div style={{flex:1, minWidth:0}}>
+                      <div style={{fontWeight:500, fontSize:15, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{acc.account_name || acc.username || platformName}</div>
+                      <div style={{color: statusColor, fontSize:'12px'}}>{statusLabel}</div>
                     </div>
-                    {/* Bouton supprimer - Plus visible */}
                     <button
-                      onClick={async (e) => {
-                        e.stopPropagation();
+                      onClick={async () => {
                         if (!window.confirm(`Supprimer ce compte ${platformName} ?`)) return;
                         try {
                           await axios.delete(`${API}/accounts/${acc.id}`);
@@ -523,9 +523,9 @@ export default function App() {
                         } catch (err) { alert('Erreur suppression'); }
                       }}
                       className="delete-acc-btn"
-                      title="Supprimer ce compte"
+                      style={{marginLeft:'auto', padding: 10, cursor: 'pointer', background: 'transparent', border: 'none'}}
                     >
-                      <Trash size={18}/>
+                      <Trash size={20}/>
                     </button>
                  </div>
                  );
@@ -900,7 +900,7 @@ export default function App() {
 
                  <button
                    className="lx-btn"
-                   style={{background:'var(--surface-300)', border:'1px solid var(--border-muted)', color:'white'}}
+                   style={{background:'white', color:'black', fontWeight:600}}
                    onClick={() => {
                      const fakeConv = { contacts: [selectedContactDetail], external_id: selectedContactDetail.external_id, title: getContactName(selectedContactDetail) };
                      startCall(fakeConv);

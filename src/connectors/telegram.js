@@ -4,7 +4,7 @@
  * Same architecture as WhatsApp connector
  */
 
-import { TelegramClient } from 'telegram';
+import { TelegramClient, Api } from 'telegram';
 import { StringSession } from 'telegram/sessions/index.js';
 import { NewMessage } from 'telegram/events/index.js';
 import logger from '../utils/logger.js';
@@ -85,11 +85,13 @@ export const verifyTelegramCode = async (accountId, code, password2fa = null) =>
   const { client, phone, phoneCodeHash } = session;
 
   try {
-    await client.signIn({
-      phoneNumber: phone,
-      phoneCodeHash,
-      phoneCode: code
-    });
+    await client.invoke(
+      new Api.auth.SignIn({
+        phoneNumber: phone,
+        phoneCodeHash: phoneCodeHash,
+        phoneCode: code
+      })
+    );
   } catch (err) {
     if (err.message?.includes('SESSION_PASSWORD_NEEDED') || err.errorMessage === 'SESSION_PASSWORD_NEEDED') {
       if (!password2fa) {
