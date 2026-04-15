@@ -289,9 +289,11 @@ app.get('/api/messages/:convId', async (req, res) => {
       query = query.eq('conversation_id', convId);
     }
 
-    const { data, error } = await query.order('timestamp', { ascending: true }).limit(200);
+    // FIX: ORDER DESC pour avoir les 200 plus récents, puis reverse pour affichage chronologique
+    // Sans ça, limit(200) + ascending retourne les 200 PLUS ANCIENS (le dernier message n'apparaît jamais)
+    const { data, error } = await query.order('timestamp', { ascending: false }).limit(200);
     if (error) throw error;
-    res.json(data || []);
+    res.json((data || []).reverse()); // Remettre en ordre chronologique pour l'affichage
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

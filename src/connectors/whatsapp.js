@@ -1078,42 +1078,50 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
       if (!sock) return;
       logger.info('[WA-CASCADE-SYNC] Starting background history worker...');
 
-      const MAX_ITERATIONS = 50;
-      let iteration = 0;
+      const MAX_ATTEMPTS_PER_CONV = 8;     // Au-delà, on abandonne cette conv
+      const RETRY_INTERVAL_MS = 8 * 60 * 1000; // Re-demander après 8min si rien reçu
+      const DELAY_BETWEEN_REQS = 3000;          // 3s entre chaque requête WA
+      const BATCH_SIZE = 10;                    // Convs traitées par batch
 
-      while (sock && iteration < MAX_ITERATIONS) {
-        iteration++;
+      while (sock) {
         try {
-          // Trouver les conversations qui n'ont pas encore été demandées (ou dont la demande est ancienne)
-          const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
-
-          const { data: convs } = await supabase.from('conversations')
+          // CLEF: Récupérer TOUTES les convs sans historique complet (pas seulement les 5 premières)
+          const { data: allConvs } = await supabase.from('conversations')
             .select('id, external_id, metadata')
             .eq('account_id', accountId)
             .or('metadata->history_sync_complete.is.null,metadata->history_sync_complete.eq.false')
-            .order('last_message_at', { ascending: false })
-            .limit(5);
+            .limit(200); // Large pour couvrir toutes les convs en attente
 
-          if (!convs || convs.length === 0) {
+          if (!allConvs || allConvs.length === 0) {
             logger.info('[WA-CASCADE-SYNC] All histories complete. Worker stopping.');
             break;
           }
 
-          // Filtrer celles qui ont déjà été demandées récemment (eviter le spam)
-          const toProcess = convs.filter(c => {
+          const now = Date.now();
+
+          // Filtrer côté client: jamais demandées en priorité, puis anciennes demandes
+          const toProcess = allConvs.filter(c => {
+            if (c.metadata?.history_sync_complete) return false;
+            if ((c.metadata?.history_sync_attempts || 0) >= MAX_ATTEMPTS_PER_CONV) return false;
             const lastReq = c.metadata?.history_sync_requested_at;
-            if (!lastReq) return true; // Jamais demandée
-            return new Date(lastReq) < new Date(fiveMinAgo); // Demandée il y a > 5min
+            if (!lastReq) return true; // Jamais demandée → priorité max
+            return (now - new Date(lastReq).getTime()) > RETRY_INTERVAL_MS;
           });
 
+          logger.info(`[WA-CASCADE-SYNC] ${toProcess.length} convs à traiter sur ${allConvs.length} en attente`);
+
           if (toProcess.length === 0) {
-            // Toutes les conv ont déjà été demandées récemment, attendre
-            logger.info('[WA-CASCADE-SYNC] All pending convs requested recently. Waiting 2min...');
-            await delay(120000);
+            // Toutes les convs ont été demandées récemment → attendre le retry interval
+            const waitMs = RETRY_INTERVAL_MS;
+            logger.info(`[WA-CASCADE-SYNC] Toutes demandées récemment. Pause ${waitMs/60000}min...`);
+            await delay(waitMs);
             continue;
           }
 
-          for (const conv of toProcess) {
+          // Traiter par lots de BATCH_SIZE
+          const batch = toProcess.slice(0, BATCH_SIZE);
+
+          for (const conv of batch) {
             if (!sock) break;
 
             // Trouver le message le plus ancien pour construire le cursor
@@ -1131,52 +1139,50 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
             logger.info(`[WA-CASCADE-SYNC] Requesting history for ${conv.external_id} (${msgCount || 0} msgs, cursor: ${oldestMsg?.remote_id || 'none'})`);
 
             try {
-              // Construire le cursor Baileys: objet WAMessage minimal
               const cursor = oldestMsg ? {
-                key: {
-                  id: oldestMsg.remote_id,
-                  remoteJid: conv.external_id,
-                  fromMe: false
-                },
+                key: { id: oldestMsg.remote_id, remoteJid: conv.external_id, fromMe: false },
                 messageTimestamp: Math.floor(new Date(oldestMsg.timestamp).getTime() / 1000)
               } : undefined;
 
-              // fetchMessageHistory envoie une requête WA.
-              // Les messages arrivent ensuite via l'événement messaging-history.set
               await sock.fetchMessageHistory(50, cursor, cursor?.messageTimestamp).catch(e => {
-                logger.warn(`[WA-CASCADE-SYNC] fetchMessageHistory for ${conv.external_id}: ${e.message}`);
+                logger.warn(`[WA-CASCADE-SYNC] fetchMessageHistory failed for ${conv.external_id}: ${e.message}`);
               });
             } catch (e) {
               logger.error(`[WA-CASCADE-SYNC-ERR] ${conv.external_id}: ${e.message}`);
             }
 
-            // Marquer comme "demandée" pour éviter les requêtes en boucle
             const attempts = (conv.metadata?.history_sync_attempts || 0) + 1;
             const newMeta = {
               ...(conv.metadata || {}),
               history_sync_requested_at: new Date().toISOString(),
-              history_sync_attempts: attempts
+              history_sync_attempts: attempts,
+              ...(attempts >= MAX_ATTEMPTS_PER_CONV ? { history_sync_complete: true } : {})
             };
-
-            // Après 10 tentatives sans messages, abandonner pour cette conversation
-            if (attempts >= 10) {
-              newMeta.history_sync_complete = true;
-              logger.info(`[WA-CASCADE-SYNC] ${conv.external_id}: max attempts reached, marking complete.`);
+            if (attempts >= MAX_ATTEMPTS_PER_CONV) {
+              logger.info(`[WA-CASCADE-SYNC] ${conv.external_id}: ${attempts} tentatives, abandon.`);
             }
 
             await supabase.from('conversations').update({ metadata: newMeta }).eq('id', conv.id);
-            await delay(3000); // 3s entre chaque requête pour respecter les limites WA
+            await delay(DELAY_BETWEEN_REQS);
           }
 
-          // Pause entre les batches pour laisser messaging-history.set traiter les résultats
-          await delay(30000);
+          // Si des convs restent à traiter dans ce cycle, enchaîner immédiatement
+          if (toProcess.length > BATCH_SIZE) {
+            logger.info(`[WA-CASCADE-SYNC] ${toProcess.length - BATCH_SIZE} convs restantes, batch suivant dans 5s...`);
+            await delay(5000);
+          } else {
+            // Tout traité dans ce batch, attendre avant le prochain cycle complet
+            logger.info(`[WA-CASCADE-SYNC] Batch complet. Prochain cycle dans 10min...`);
+            await delay(10 * 60 * 1000);
+          }
+
         } catch (e) {
           logger.error(`[WA-CASCADE-SYNC-LOOP] ${e.message}`);
-          await delay(10000);
+          await delay(15000);
         }
       }
 
-      logger.info('[WA-CASCADE-SYNC] Worker finished.');
+      logger.info('[WA-CASCADE-SYNC] Worker stopped.');
     };
 
     // startHistoryCascadeWorker(); // Appelé depuis connection.update → open

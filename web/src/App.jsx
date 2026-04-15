@@ -133,33 +133,40 @@ export default function App() {
   useEffect(() => { if (user) { preloadData(); const id = setInterval(preloadData, 5000); return () => clearInterval(id); } }, [user, preloadData]);
 
   // ── Message Polling ────────────────────────────────────────
+  const [loadedConvId, setLoadedConvId] = useState(null);
+
   const fetchMessages = useCallback(async (cid) => {
-    try { const r = await axios.get(`${API}/messages/${cid}`); setMessages(r.data); } catch (e) {}
+    try {
+      const r = await axios.get(`${API}/messages/${cid}`);
+      setMessages(r.data);
+      setLoadedConvId(cid); // Tracker la conv dont les messages viennent d'arriver
+    } catch (e) {}
   }, []);
 
   useEffect(() => {
     if (!selectedConv) return;
+    setMessages([]); // Vider les anciens messages immédiatement (évite flash + mauvais scroll)
     fetchMessages(selectedConv.id);
     const id = setInterval(() => fetchMessages(selectedConv.id), 3000);
     return () => clearInterval(id);
   }, [selectedConv, fetchMessages]);
 
-  // Scroll to bottom only when: (a) conversation changes, or (b) new message and already at bottom
-  const prevConvIdRef = useRef(null);
+  // Scroll intelligent : descend uniquement si conv vient de charger ou si on était déjà en bas
+  const prevLoadedConvIdRef = useRef(null);
   useEffect(() => {
-    const area = messagesAreaRef.current;
-    const isNewConv = selectedConv?.id !== prevConvIdRef.current;
-    prevConvIdRef.current = selectedConv?.id;
+    if (!messages.length) return; // Pas encore de messages — rien à faire
+    const isFirstLoad = loadedConvId !== prevLoadedConvIdRef.current;
+    prevLoadedConvIdRef.current = loadedConvId;
 
-    if (isNewConv) {
-      // Changed conversation → always jump to bottom immediately
+    if (isFirstLoad) {
+      // Première arrivée des messages → scroll immédiat vers le bas (dernier message)
       isAtBottomRef.current = true;
-      messagesEndRef.current?.scrollIntoView({ behavior: 'instant' });
+      requestAnimationFrame(() => messagesEndRef.current?.scrollIntoView({ behavior: 'instant' }));
     } else if (isAtBottomRef.current) {
-      // Same conversation, new message, user was at bottom → smooth scroll
+      // Même conv, nouveau message, utilisateur était en bas → scroll doux
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [messages, selectedConv]);
+  }, [messages, loadedConvId]);
 
   // ── Actions ────────────────────────────────────────────────
   const sendText = async (e) => {
@@ -236,19 +243,19 @@ export default function App() {
 
   const formatName = (str) => {
     if (!str) return 'Inconnu';
+    // Les @lid sont des identifiants techniques WhatsApp (ex: "176008481255424@lid")
+    if (str.includes('@lid')) return 'Contact WhatsApp';
     const clean = str.split('@')[0].replace(/[+\s-]/g, '');
-    
-    // Si c'est un numéro de téléphone probable
-    if (/^\d{10,15}$/.test(clean)) {
-       if (clean.startsWith('33')) {
+
+    // ID technique WA (14+ chiffres sans structure téléphonique connue)
+    if (/^\d{14,}$/.test(clean)) return 'Contact WhatsApp';
+
+    // Numéro de téléphone standard (10-13 chiffres)
+    if (/^\d{10,13}$/.test(clean)) {
+       if (clean.startsWith('33') && clean.length === 11) {
          return `+33 ${clean.slice(2,3)} ${clean.slice(3,5)} ${clean.slice(5,7)} ${clean.slice(7,9)} ${clean.slice(9,11)}`;
        }
        return `+${clean}`;
-    }
-
-    // Si c'veut un ID technique (@lid ou numéro trop long sans structure)
-    if (str.includes('@lid') || /^\d{16,}$/.test(clean)) {
-       return 'Utilisateur WhatsApp';
     }
 
     return str;
@@ -257,9 +264,12 @@ export default function App() {
   const getDisplayName = (conv) => {
     const c = Array.isArray(conv.contacts) ? conv.contacts[0] : conv.contacts;
     if (c?.display_name) {
-       const isId = /^\d{16,}$/.test(c.display_name.replace(/[+\s-]/g, '')) || c.display_name.includes('@');
-       if (!isId) return c.display_name;
+       const dn = c.display_name;
+       const isLid = dn.includes('@lid') || dn.includes('@s.whatsapp.net');
+       const isRawNum = /^\d{14,}$/.test(dn.replace(/[+\s-]/g, ''));
+       if (!isLid && !isRawNum) return dn; // C'est un vrai nom
     }
+    // Fallback: titre de la conv (peut être un nom ou un numéro)
     return conv.title ? formatName(conv.title) : formatName(conv.external_id);
   };
 
@@ -275,18 +285,24 @@ export default function App() {
   const resolveContactName = useCallback((senderId, participantId = null) => {
     const idToSearch = participantId || senderId;
     if (!idToSearch) return 'Inconnu';
-    
+
     let contact = contacts.find(c => c.external_id === idToSearch);
     if (!contact) {
       const pureId = idToSearch.split('@')[0];
-      contact = contacts.find(c => c.external_id?.startsWith(pureId));
+      // Chercher par numéro brut (ex: résoudre @lid vers @s.whatsapp.net)
+      contact = contacts.find(c => {
+        const cPure = c.external_id?.split('@')[0];
+        return cPure === pureId;
+      });
     }
 
     if (contact?.display_name) {
-       const isId = /^\d{16,}$/.test(contact.display_name.replace(/[+\s-]/g, '')) || contact.display_name.includes('@');
-       if (!isId) return contact.display_name;
+       const dn = contact.display_name;
+       const isLid = dn.includes('@lid') || dn.includes('@s.whatsapp.net');
+       const isRawNum = /^\d{14,}$/.test(dn.replace(/[+\s-]/g, ''));
+       if (!isLid && !isRawNum) return dn; // Vrai nom
     }
-    
+
     return formatName(idToSearch);
   }, [contacts]);
 
