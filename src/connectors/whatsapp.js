@@ -368,6 +368,10 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
   };
 
   const startSocket = async () => {
+    logger.info(`[WA] Initializing socket for ${accountId}...`);
+    onEvent('status', { status: 'pairing' }); // Signal start to UI immediately
+    
+    // Check Multi-Instance Lock
     const hasLock = await claimLock();
     if (!hasLock) {
       logger.warn(`[WA-LOCK] Session locked by another instance. Retrying in 30s...`);
