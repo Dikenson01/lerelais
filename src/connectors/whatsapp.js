@@ -171,7 +171,19 @@ const extractContent = (message) => {
     || message.documentMessage?.fileName
     || (message.audioMessage ? '🎵 Message audio' : null)
     || (message.stickerMessage ? '🎭 Sticker' : null)
+    || (message.buttonsResponseMessage?.selectedButtonId ? `🔘 Bouton: ${message.buttonsResponseMessage.selectedDisplayText}` : null)
+    || (message.listResponseMessage?.title ? `📋 Liste: ${message.listResponseMessage.title}` : null)
     || '';
+};
+
+const getQuotedInfo = (message) => {
+  const quoted = message?.extendedTextMessage?.contextInfo?.quotedMessage;
+  if (!quoted) return null;
+  return {
+    remote_id: message.extendedTextMessage.contextInfo.stanzaId,
+    sender: message.extendedTextMessage.contextInfo.participant,
+    content: extractContent(quoted)
+  };
 };
 
 export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone = null) => {
@@ -547,7 +559,6 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
       for (const chat of chats) {
         const jid = jidNormalizedUser(chat.id);
         const isGroup = jid.endsWith('@g.us');
-        // Utiliser le vrai timestamp WhatsApp si disponible
         const lastMsgAt = chat.conversationTimestamp
           ? new Date(Number(chat.conversationTimestamp) * 1000)
           : new Date();
@@ -559,7 +570,11 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
           title: chat.name || jid.split('@')[0],
           is_group: isGroup,
           unread_count: chat.unreadCount || 0,
-          metadata: { is_archived: chat.archived === true },
+          metadata: { 
+            is_archived: chat.archived === true,
+            is_pinned: (chat.pin && chat.pin > 0) || false,
+            is_muted: chat.mute !== undefined && chat.mute !== null
+          },
           last_message_at: lastMsgAt
         }, { onConflict: 'account_id, external_id' });
       }
@@ -568,11 +583,17 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
     sock.ev.on('chats.update', async (updates) => {
       try {
         for (const update of updates) {
-          if (update.archived !== undefined) {
-            const jid = jidNormalizedUser(update.id);
-            await supabase.from('conversations').update({
-              metadata: { is_archived: update.archived === true }
-            }).eq('account_id', accountId).eq('external_id', jid);
+          const jid = jidNormalizedUser(update.id);
+          const metaUpdate = {};
+          if (update.archived !== undefined) metaUpdate.is_archived = update.archived === true;
+          if (update.pin !== undefined) metaUpdate.is_pinned = (update.pin && update.pin > 0) || false;
+          if (update.mute !== undefined) metaUpdate.is_muted = update.mute !== null;
+
+          if (Object.keys(metaUpdate).length > 0) {
+            // Fetch existing metadata to merge
+            const { data: conv } = await supabase.from('conversations').select('metadata').eq('account_id', accountId).eq('external_id', jid).maybeSingle();
+            const newMeta = { ...(conv?.metadata || {}), ...metaUpdate };
+            await supabase.from('conversations').update({ metadata: newMeta }).eq('account_id', accountId).eq('external_id', jid);
           }
         }
       } catch (e) {
@@ -686,6 +707,25 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
     });
 
     // --- CONTACTS ---
+    sock.ev.on('messages.reaction', async (reactions) => {
+      for (const reaction of reactions) {
+        const remote_id = reaction.key.id;
+        const emoji = reaction.reaction.text;
+        const sender = reaction.reaction.senderJid;
+
+        const { data: msg } = await supabase.from('messages').select('metadata').eq('remote_id', remote_id).maybeSingle();
+        if (msg) {
+          const newReactions = { ...(msg.metadata?.reactions || {}) };
+          if (emoji) {
+            newReactions[sender] = emoji;
+          } else {
+            delete newReactions[sender];
+          }
+          await supabase.from('messages').update({ metadata: { ...msg.metadata, reactions: newReactions } }).eq('remote_id', remote_id);
+        }
+      }
+    });
+
     sock.ev.on('contacts.upsert', async (contacts) => {
       for (const contact of contacts) {
         const jid = jidNormalizedUser(contact.id);
@@ -770,6 +810,7 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
         }
 
         // Insérer le message (envoyé OU reçu)
+        const quoted = getQuotedInfo(msg.message);
         const { data: insertedMsg } = await supabase.from('messages').upsert({
           conversation_id: convId,
           account_id: accountId,
@@ -780,7 +821,10 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
           media_url: mediaUrl,
           is_from_me: isFromMe,
           timestamp: new Date((msg.messageTimestamp?.low || msg.messageTimestamp || Date.now() / 1000) * 1000),
-          metadata: { participant: msg.key.participant || null }
+          metadata: { 
+            participant: msg.key.participant || null,
+            quoted: quoted
+          }
         }, { onConflict: 'remote_id' }).select('id').single();
 
         // Mettre à jour la preview de la conversation
