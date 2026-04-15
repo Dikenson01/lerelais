@@ -481,31 +481,62 @@ export default function App() {
                );
              })
            ) : view === 'settings' ? (
-             <div style={{padding:'0 24px'}}>
-               <p style={{color:'var(--text-dim)', fontSize:'12px', marginBottom:'12px'}}>Comptes connectés</p>
+             <div style={{padding:'0 16px'}}>
+               <p style={{color:'var(--text-dim)', fontSize:'12px', marginBottom:'12px', marginTop:'12px'}}>Comptes connectés</p>
                {accounts.length === 0 && (
                  <p style={{color:'var(--text-dim)', fontSize:'13px', marginBottom:'16px', textAlign:'center', padding:'20px 0'}}>Aucun compte connecté</p>
                )}
                {accounts.map(acc => {
                  const isConnected = acc.status === 'connected';
-                 const statusColor = isConnected ? 'var(--accent-green)' : acc.status === 'pairing' ? 'var(--accent-gold)' : 'var(--accent-red)';
-                 const statusLabel = isConnected ? '● Connecté' : acc.status === 'pairing' ? '◌ En cours...' : '○ Déconnecté';
+                 const statusColor = isConnected ? 'var(--accent-green)' : acc.status === 'pairing' || acc.status === 'challenge' ? 'var(--accent-gold)' : 'var(--accent-red)';
+                 const statusLabel = isConnected ? '● Connecté' : acc.status === 'pairing' ? '◌ Connexion...' : acc.status === 'challenge' ? '◌ Vérification...' : '○ Déconnecté';
+
+                 // Icône et couleur par plateforme
+                 const platformIcon = acc.platform === 'telegram' ? (
+                   <svg width="18" height="18" viewBox="0 0 24 24" fill="white"><path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"/></svg>
+                 ) : acc.platform === 'instagram' ? (
+                   <svg width="18" height="18" viewBox="0 0 24 24" fill="white"><path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z"/></svg>
+                 ) : (
+                   <svg width="18" height="18" viewBox="0 0 24 24" fill="white"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/><path d="M12 0C5.373 0 0 5.373 0 12c0 2.117.554 4.103 1.523 5.824L.057 23.882l6.233-1.635A11.945 11.945 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 21.818c-1.961 0-3.79-.527-5.364-1.446l-.384-.228-3.984 1.045 1.063-3.878-.25-.398A9.796 9.796 0 012.182 12C2.182 6.57 6.57 2.182 12 2.182S21.818 6.57 21.818 12 17.43 21.818 12 21.818z"/></svg>
+                 );
+                 const platformBg = acc.platform === 'telegram' ? '#229ED9'
+                   : acc.platform === 'instagram' ? 'linear-gradient(45deg,#f09433,#dc2743,#bc1888)'
+                   : '#25D366';
+                 const platformName = acc.platform === 'telegram' ? 'Telegram'
+                   : acc.platform === 'instagram' ? 'Instagram'
+                   : 'WhatsApp';
+
                  return (
-                 <div key={acc.id} className="conv-card" style={{background:'var(--surface-200)', marginBottom:'10px', border:'1px solid var(--border-muted)'}}>
-                    <div style={{width:36,height:36,borderRadius:'50%',background:'#25D366',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="white"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/><path d="M12 0C5.373 0 0 5.373 0 12c0 2.117.554 4.103 1.523 5.824L.057 23.882l6.233-1.635A11.945 11.945 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 21.818c-1.961 0-3.79-.527-5.364-1.446l-.384-.228-3.984 1.045 1.063-3.878-.25-.398A9.796 9.796 0 012.182 12C2.182 6.57 6.57 2.182 12 2.182S21.818 6.57 21.818 12 17.43 21.818 12 21.818z"/></svg>
+                 <div key={acc.id} className="conv-card" style={{background:'var(--surface-200)', marginBottom:'10px', border:'1px solid var(--border-muted)', alignItems:'center', paddingRight:'12px'}}>
+                    <div style={{width:36,height:36,borderRadius:'50%',background:platformBg,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+                      {platformIcon}
                     </div>
                     <div className="conv-content">
-                      <strong>{acc.account_name || 'Mon WhatsApp'}</strong>
+                      <strong>{acc.account_name || acc.username || platformName}</strong>
                       <p style={{color: statusColor, fontSize:'12px'}}>{statusLabel}</p>
                     </div>
+                    {/* Bouton supprimer - Plus visible */}
+                    <button
+                      onClick={async (e) => {
+                        e.stopPropagation();
+                        if (!window.confirm(`Supprimer ce compte ${platformName} ?`)) return;
+                        try {
+                          await axios.delete(`${API}/accounts/${acc.id}`);
+                          preloadData();
+                        } catch (err) { alert('Erreur suppression'); }
+                      }}
+                      className="delete-acc-btn"
+                      title="Supprimer ce compte"
+                    >
+                      <Trash size={18}/>
+                    </button>
                  </div>
                  );
                })}
                <button className="lx-btn" style={{marginTop:'12px', marginBottom:'8px'}} onClick={()=>setShowAddModal(true)}>
                  + Connecter un compte
                </button>
-               <button className="lx-btn" style={{background:'var(--accent-red)', color:'white'}} onClick={()=>{clearToken();setUser(null)}}>
+               <button className="lx-btn" style={{background:'var(--accent-red)', color:'white', marginBottom:'80px'}} onClick={()=>{clearToken();setUser(null)}}>
                  Déconnexion du Hub
                </button>
              </div>
@@ -523,6 +554,32 @@ export default function App() {
                   <div className="conv-content">
                     <div className="conv-top">
                       <strong>{getDisplayName(conv)} {conv.metadata?.is_pinned && <Pin size={10} style={{marginLeft:4, color:'var(--accent-gold)'}}/>}</strong>
+                      <div style={{display:'flex', alignItems:'center', gap:'8px'}}>
+                        <span className="time">{conv.last_message_at ? new Date(conv.last_message_at).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : ''}</span>
+                        <button className="archive-btn" onClick={(e) => { e.stopPropagation(); toggleArchive(conv); }}>
+                          <Archive size={14} color={conv.metadata?.is_archived ? 'var(--accent-gold)' : 'var(--text-dim)'}/>
+                        </button>
+                      </div>
+                    </div>
+                    <p>{conv.last_message_preview || 'Aucun message'}</p>
+                  </div>
+               </div>
+             ))
+           )}
+        </div>
+
+        {/* BOTTOM NAV (Mobile only) */}
+        {isMobile && (
+          <nav className="nav-bottom">
+            <button className={`nav-item ${view==='inbox'?'active':''}`} onClick={()=>setView('inbox')}><MessageSquare size={20}/></button>
+            <button className={`nav-item ${view==='archive'?'active':''}`} onClick={()=>setView('archive')}><Archive size={20}/></button>
+            <button className={`nav-item ${view==='contacts'?'active':''}`} onClick={()=>setView('contacts')}><Users size={20}/></button>
+            <button className={`nav-item ${view==='settings'?'active':''}`} onClick={()=>setView('settings')}><Settings size={20}/></button>
+          </nav>
+        )}
+      </div>
+
+      {/* CHAT PANE */}in size={10} style={{marginLeft:4, color:'var(--accent-gold)'}}/>}</strong>
                       <div style={{display:'flex', alignItems:'center', gap:'8px'}}>
                         <span className="time">{conv.last_message_at ? new Date(conv.last_message_at).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : ''}</span>
                         <button className="archive-btn" onClick={(e) => { e.stopPropagation(); toggleArchive(conv); }}>

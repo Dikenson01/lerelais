@@ -37,7 +37,13 @@ export const startTelegramAuth = async (accountId, phoneNumber) => {
 
   const client = new TelegramClient(new StringSession(savedSession), apiId, apiHash, {
     connectionRetries: 5,
-    baseLogger: { log: () => {}, warn: () => {}, error: (msg) => logger.warn(`[TG] ${msg}`) }
+    useWSS: true,
+    baseLogger: {
+      info: (...args) => logger.info('[TG-INT]', ...args),
+      warn: (...args) => logger.warn('[TG-INT]', ...args),
+      error: (...args) => logger.error('[TG-INT]', ...args),
+      debug: () => {}
+    }
   });
 
   await client.connect();
@@ -233,7 +239,13 @@ export const restoreTelegramConnector = async (accountId) => {
   try {
     const client = new TelegramClient(new StringSession(savedSession), apiId, apiHash, {
       connectionRetries: 5,
-      baseLogger: { log: () => {}, warn: () => {}, error: (msg) => logger.warn(`[TG] ${msg}`) }
+      useWSS: true,
+      baseLogger: {
+        info: (...args) => logger.info('[TG-INT]', ...args),
+        warn: (...args) => logger.warn('[TG-INT]', ...args),
+        error: (...args) => logger.error('[TG-INT]', ...args),
+        debug: () => {}
+      }
     });
 
     await client.connect();

@@ -19,6 +19,10 @@ import {
   restoreTelegramConnector,
   sendTelegramMessage
 } from './connectors/telegram.js';
+import {
+  verifyInstagramChallenge,
+  verifyInstagram2FA
+} from './connectors/instagram.js';
 
 dotenv.config();
 
@@ -541,14 +545,50 @@ app.post('/api/connect/instagram', async (req, res) => {
     await supabase.from('accounts').insert({
       id: accountId, user_id: req.userId, platform: 'instagram', status: 'pairing', username
     });
-    const connector = await connectToInstagram(accountId, username, password,
-      (platform, from, text) => relayToTelegram(platform, from, text, accountId, from),
-      { onConnected: () => { activeConnectors[accountId] = connector; } }
-    );
-    activeConnectors[accountId] = connector;
-    res.json({ accountId, status: 'connected' });
+    try {
+      const connector = await connectToInstagram(accountId, username, password,
+        (platform, from, text) => relayToTelegram(platform, from, text, accountId, from),
+        { onConnected: () => {} }
+      );
+      activeConnectors[accountId] = connector;
+      res.json({ accountId, status: 'connected' });
+    } catch (igErr) {
+      if (igErr.type === 'challenge') {
+        return res.json({ accountId, status: 'challenge' });
+      }
+      if (igErr.type === '2fa') {
+        return res.json({ accountId, status: '2fa' });
+      }
+      throw igErr;
+    }
   } catch (e) {
     logger.error('[IG-CONNECT]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Instagram challenge (email/SMS code)
+app.post('/api/connect/instagram/challenge', async (req, res) => {
+  const { accountId, code } = req.body;
+  if (!accountId || !code) return res.status(400).json({ error: 'accountId et code requis' });
+  try {
+    const result = await verifyInstagramChallenge(accountId, code);
+    res.json(result);
+  } catch (e) {
+    logger.error('[IG-CHALLENGE]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Instagram 2FA
+app.post('/api/connect/instagram/2fa', async (req, res) => {
+  const { accountId, code } = req.body;
+  if (!accountId || !code) return res.status(400).json({ error: 'accountId et code requis' });
+  try {
+    const result = await verifyInstagram2FA(accountId, code);
+    res.json(result);
+  } catch (e) {
+    logger.error('[IG-2FA]', e.message);
     res.status(500).json({ error: e.message });
   }
 });

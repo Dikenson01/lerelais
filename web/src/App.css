@@ -415,3 +415,23 @@ button {
   
   .chat-header { padding-top: 12px; }
 }
+
+/* BOTTOM NAV (Mobile) */
+.nav-bottom {
+  position: fixed; bottom: 0; left: 0; right: 0;
+  height: 64px; background: rgba(22, 22, 22, 0.85); backdrop-filter: blur(20px);
+  border-top: 1px solid var(--border-muted);
+  display: flex; justify-content: space-around; align-items: center;
+  z-index: 1000; padding-bottom: env(safe-area-inset-bottom);
+}
+.nav-bottom .nav-item { height: 100%; width: 25%; border-radius: 0; }
+.nav-bottom .nav-item.active { background: none; color: var(--accent-gold); }
+
+.delete-acc-btn {
+  padding: 8px; border-radius: 10px; color: var(--text-dim); background: var(--surface-300); border: 1px solid var(--border-muted); flex-shrink: 0; transition: all 0.2s; cursor: pointer;
+}
+.delete-acc-btn:hover { color: var(--accent-red); background: rgba(255, 69, 58, 0.1); border-color: var(--accent-red); }
+
+@media (max-width: 768px) {
+  .scroll-area { padding-bottom: 80px !important; }
+}
