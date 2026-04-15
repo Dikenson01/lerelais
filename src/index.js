@@ -196,25 +196,14 @@ app.get('/api/conversations', async (req, res) => {
 
     if (error) throw error;
 
-    // Déduplique par contact
+    // Déduplique par external_id (safety net ultime)
     const unified = [];
-    const seenContacts = new Set();
-    const seenGroups = new Set();
-
-    const { data: allContacts } = await supabase.from('contacts').select('id, external_id, metadata').in('account_id', accountIds);
-    const contactMap = new Map();
-    if (allContacts) {
-      for (const c of allContacts) {
-        contactMap.set(c.external_id, c.id);
-        if (c.metadata?.lid) contactMap.set(c.metadata.lid, c.id);
-      }
-    }
+    const seenExternalIds = new Set();
 
     for (const conv of (convs || [])) {
-      if (conv.is_group) {
-        if (!seenGroups.has(conv.external_id)) { unified.push(conv); seenGroups.add(conv.external_id); }
-        continue;
-      }
+      if (seenExternalIds.has(conv.external_id)) continue;
+      
+      // Link contact if missing
       if (!conv.contact_id) {
         const matchId = contactMap.get(conv.external_id);
         if (matchId) {
@@ -222,11 +211,9 @@ app.get('/api/conversations', async (req, res) => {
           supabase.from('conversations').update({ contact_id: matchId }).eq('id', conv.id).then(() => {});
         }
       }
-      if (conv.contact_id) {
-        if (!seenContacts.has(conv.contact_id)) { unified.push(conv); seenContacts.add(conv.contact_id); }
-      } else {
-        unified.push(conv);
-      }
+      
+      unified.push(conv);
+      seenExternalIds.add(conv.external_id);
     }
 
     res.json(unified);

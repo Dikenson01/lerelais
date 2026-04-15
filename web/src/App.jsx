@@ -217,7 +217,12 @@ export default function App() {
 
   const getDisplayName = (conv) => {
     const c = Array.isArray(conv.contacts) ? conv.contacts[0] : conv.contacts;
-    return c?.display_name || conv.title || conv.external_id?.split('@')[0] || 'Inconnu';
+    if (c?.display_name) {
+       // Si le nom est juste un ID numérique, on essaie de formater ou garder le title
+       const isNumeric = /^\d+$/.test(c.display_name.replace(/[+\s-]/g, ''));
+       if (!isNumeric || !conv.title) return c.display_name;
+    }
+    return conv.title || conv.external_id?.split('@')[0] || 'Inconnu';
   };
 
   const toggleArchive = async (conv) => {
