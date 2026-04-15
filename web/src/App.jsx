@@ -219,6 +219,7 @@ export default function App() {
   const [showAddModal, setShowAddModal]   = useState(false);
   const [previewImage, setPreviewImage]   = useState(null);
   const [sending, setSending]             = useState(false);
+  const [showArchived, setShowArchived]   = useState(false);
 
   // Pairing
   const [pairingStatus, setPairingStatus] = useState(null);
@@ -422,7 +423,9 @@ export default function App() {
   };
 
   const filteredConvs = conversations.filter(c => {
-    if (c.metadata?.is_archived) return false;
+    const isArchived = !!c.metadata?.is_archived;
+    if (showArchived !== isArchived) return false;
+    
     if (!searchQuery) return true;
     const q = searchQuery.toLowerCase();
     const contact = Array.isArray(c.contacts) ? c.contacts[0] : c.contacts;
@@ -476,9 +479,23 @@ export default function App() {
       <div className={`list-pane ${(selectedConv||(isMobile&&!['inbox','contacts','settings'].includes(view)))?'hidden':''}`}>
         <header className="pane-header">
           <h1>
-            {view==='inbox'?'Messages':view==='contacts'?'Répertoire':'Paramètres'}
+            {view==='inbox'?(showArchived?'Archives':'Messages'):view==='contacts'?'Répertoire':'Paramètres'}
             <span className="badge">{view==='inbox'?filteredConvs.length:view==='contacts'?filteredContacts.length:''}</span>
           </h1>
+          
+          {view === 'inbox' && (
+            <div className="view-toggle" style={{display:'flex',background:'rgba(255,255,255,0.05)',borderRadius:'10px',padding:'2px',marginBottom:'12px'}}>
+              <button 
+                onClick={()=>setShowArchived(false)} 
+                style={{flex:1,padding:'6px',fontSize:'12px',borderRadius:'8px',background:!showArchived?'var(--white)':'transparent',color:!showArchived?'#000':'var(--med-gray)',fontWeight:600,transition:'all 0.2s'}}
+              >Actifs</button>
+              <button 
+                onClick={()=>setShowArchived(true)} 
+                style={{flex:1,padding:'6px',fontSize:'12px',borderRadius:'8px',background:showArchived?'var(--white)':'transparent',color:showArchived?'#000':'var(--med-gray)',fontWeight:600,transition:'all 0.2s'}}
+              >Archivés</button>
+            </div>
+          )}
+
           <div className="search-box"><Search size={15}/><input placeholder="Rechercher…" value={searchQuery} onChange={e=>setSearchQuery(e.target.value)}/></div>
         </header>
 

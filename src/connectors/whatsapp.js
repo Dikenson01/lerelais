@@ -519,8 +519,7 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
           const { data: contacts } = await supabase.from('contacts').select('id, external_id')
             .is('avatar_url', null)
             .eq('account_id', accountId)
-            .not('external_id', 'like', '%@lid')
-            .not('external_id', 'like', '%@g.us');
+            .not('external_id', 'like', '%@lid');
 
           if (contacts && contacts.length > 0) {
             logger.info(`[WA-PDP] Fetching ${contacts.length} profile photos (permanent storage)...`);
@@ -603,72 +602,86 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
               metadata: { lid: isLid ? jid : null }
             }, { onConflict: 'account_id, external_id', ignoreDuplicates: false });
           }
-          logger.info(`[WA-SYNC] Contacts synced: ${syncContacts.length}`);
         }
 
-        // 2. Sync Chats & Groupes — avec le vrai timestamp du dernier message
+        // 2. Sync Chats — avec le vrai timestamp du dernier message
+        const jidToConvId = {};
         if (chats) {
           for (const chat of chats) {
             const jid = jidNormalizedUser(chat.id);
             const isGroup = jid.endsWith('@g.us');
-            // Utiliser le vrai timestamp WhatsApp pour l'ordre
             const lastMsgAt = chat.conversationTimestamp
               ? new Date(Number(chat.conversationTimestamp) * 1000)
               : null;
 
             const convId = await getOrCreateUnifiedConversation(jid, chat.name, isGroup);
-
-            // Mettre à jour last_message_at avec le vrai timestamp WhatsApp (sans condition lt — le timestamp WA est plus fiable que new Date())
-            if (convId && lastMsgAt) {
+            if (convId) {
+              jidToConvId[jid] = convId;
+              // Mettre à jour l'état archivé lors de la sync
               await supabase.from('conversations')
-                .update({ last_message_at: lastMsgAt })
+                .update({ 
+                  metadata: { is_archived: chat.archived === true },
+                  last_message_at: lastMsgAt || new Date()
+                })
                 .eq('id', convId);
             }
           }
-          logger.info(`[WA-SYNC] Chats synced: ${chats.length}`);
         }
 
-        // 3. Sync Messages Historiques (texte + médias en metadata)
+        // 3. Sync Messages Historiques
         if (messages && messages.length > 0) {
-          let synced = 0;
+          // Trier les messages par conversation pour trouver le dernier
+          const latestByJid = {};
+          
           for (const msg of messages) {
             if (!msg.message) continue;
             const jid = jidNormalizedUser(msg.key.remoteJid);
-
-            const content = msg.message.conversation
-              || msg.message.extendedTextMessage?.text
-              || msg.message.imageMessage?.caption
-              || msg.message.videoMessage?.caption
-              || msg.message.documentMessage?.fileName
-              || '';
+            const ts = (msg.messageTimestamp?.low || msg.messageTimestamp || 0) * 1000;
+            
+            // Garder trace du message le plus récent pour la preview
+            if (!latestByJid[jid] || ts > latestByJid[jid].ts) {
+              latestByJid[jid] = { msg, ts };
+            }
 
             const mediaInfo = getMediaInfo(msg.message);
-            const convId = await getOrCreateUnifiedConversation(jid, msg.pushName, jid.endsWith('@g.us'));
+            const convId = jidToConvId[jid] || await getOrCreateUnifiedConversation(jid, msg.pushName, jid.endsWith('@g.us'));
 
             if (convId) {
+              const content = extractContent(msg.message);
               await supabase.from('messages').upsert({
                 conversation_id: convId,
                 account_id: accountId,
                 remote_id: msg.key.id,
-                sender_id: msg.key.fromMe ? accountId : jid,
+                sender_id: msg.key.fromMe ? accountId : (msg.key.participant || jid),
                 content: content || (mediaInfo ? `[${mediaInfo.type}]` : ''),
                 media_type: mediaInfo?.type || null,
                 is_from_me: msg.key.fromMe || false,
-                timestamp: new Date((msg.messageTimestamp?.low || msg.messageTimestamp || Date.now() / 1000) * 1000),
+                timestamp: new Date(ts || Date.now()),
                 metadata: {
                   has_media: !!mediaInfo,
                   participant: msg.key.participant || null
                 }
               }, { onConflict: 'remote_id', ignoreDuplicates: true });
-              synced++;
             }
           }
-          logger.info(`[WA-SYNC] Messages synced: ${synced}/${messages.length}`);
-        }
 
-        logger.info(`[WA] Full sync completed.`);
+          // 4. Mettre à jour les PREVIEWS des conversations après l'ingestion des messages
+          for (const [jid, data] of Object.entries(latestByJid)) {
+            const convId = jidToConvId[jid];
+            if (convId) {
+              const mediaInfo = getMediaInfo(data.msg.message);
+              const content = extractContent(data.msg.message);
+              const preview = content || (mediaInfo ? `📷 ${mediaInfo.type.charAt(0).toUpperCase() + mediaInfo.type.slice(1)}` : '');
+              
+              await supabase.from('conversations').update({
+                last_message_preview: preview
+              }).eq('id', convId);
+            }
+          }
+          logger.info(`[WA-SYNC] Previews and messages synced for ${Object.keys(latestByJid).length} chats`);
+        }
       } catch (e) {
-        logger.error(`[WA-SYNC-ERR] messaging-history.set: ${e.message}`);
+        logger.error(`[WA-SYNC-ERR] messaging-history.set: ${e.message}`, e);
       }
     });
 
