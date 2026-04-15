@@ -455,7 +455,11 @@ app.post('/api/connect/whatsapp', async (req, res) => {
     }
   });
 
-  res.json({ accountId });
+    res.json({ accountId });
+  } catch (err) {
+    logger.error('[WA-CONNECT-ERR]', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get('/api/connect/whatsapp/status/:id', async (req, res) => {
