@@ -566,40 +566,65 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
           }
 
           // 3. Scan photos de profil (par lot, progressif, avec retry)
+          // FIXED: avoid infinite loop — contacts without avatars are marked with metadata.avatar_checked_at
+          // so they're only retried after 7 days (not every 5min forever).
           const scanAvatars = async () => {
-            const { data: contacts } = await supabase.from('contacts').select('id, external_id')
+            const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+
+            // Only fetch contacts that: have no avatar AND (never checked OR checked > 7 days ago)
+            const { data: contacts } = await supabase.from('contacts').select('id, external_id, metadata')
               .is('avatar_url', null)
               .eq('account_id', accountId)
               .not('external_id', 'like', '%@lid')
-              .not('external_id', 'like', '%@g.us');
+              .not('external_id', 'like', '%@g.us')
+              .or(`metadata->avatar_checked_at.is.null,metadata->>avatar_checked_at.lt.${sevenDaysAgo}`)
+              .limit(50); // Max 50 per cycle → ~75s max (not 25min)
 
             if (contacts && contacts.length > 0) {
-              logger.info(`[WA-PDP] Fetching ${contacts.length} profile photos...`);
+              logger.info(`[WA-PDP] Fetching ${contacts.length} profile photos (batch, retry in 7d if no avatar)...`);
               let fetched = 0;
               for (const contact of contacts) {
+                if (!_sock) break;
                 try {
                   const cdnUrl = await sock.profilePictureUrl(contact.external_id, 'image').catch(() => null);
+                  const checkedAt = new Date().toISOString();
                   if (cdnUrl) {
                     const permanentUrl = await downloadAndStoreAvatar(contact.id, cdnUrl);
                     if (permanentUrl) {
                       await supabase.from('contacts').update({ avatar_url: permanentUrl }).eq('id', contact.id);
                       fetched++;
+                    } else {
+                      // Store failed → mark as checked so we don't retry for 7 days
+                      await supabase.from('contacts').update({ metadata: { ...(contact.metadata || {}), avatar_checked_at: checkedAt } }).eq('id', contact.id);
                     }
+                  } else {
+                    // No avatar (privacy setting) → mark as checked, retry in 7 days
+                    await supabase.from('contacts').update({ metadata: { ...(contact.metadata || {}), avatar_checked_at: checkedAt } }).eq('id', contact.id);
                   }
                   await delay(1500); // Rate-limit protection
                 } catch (e) {}
               }
               logger.info(`[WA-PDP] Fetched ${fetched}/${contacts.length} avatars.`);
-              
-              // Retry remaining avatars in 5 minutes
-              const remaining = contacts.length - fetched;
-              if (remaining > 0 && _sock) {
-                logger.info(`[WA-PDP] Scheduling retry for ${remaining} missing avatars in 5min...`);
-                setTimeout(scanAvatars, 300000);
+
+              // Schedule next batch in 5 minutes (to check remaining unchecked contacts)
+              if (_sock) {
+                const { count } = await supabase.from('contacts')
+                  .select('id', { count: 'exact', head: true })
+                  .is('avatar_url', null)
+                  .eq('account_id', accountId)
+                  .not('external_id', 'like', '%@lid')
+                  .not('external_id', 'like', '%@g.us')
+                  .or(`metadata->avatar_checked_at.is.null,metadata->>avatar_checked_at.lt.${sevenDaysAgo}`);
+                if (count > 0) {
+                  logger.info(`[WA-PDP] ${count} avatars remaining. Next batch in 5min...`);
+                  setTimeout(scanAvatars, 300000);
+                } else {
+                  logger.info('[WA-PDP] All avatars checked. No retry needed until 7-day window expires.');
+                }
               }
             }
           };
-          scanAvatars(); // Lancer en arrière-plan SANS await (1000 contacts × 1.5s = ~25min sinon)
+          scanAvatars(); // Lancer en arrière-plan SANS await
 
           // 4. Scan noms de groupes et participants (Identity Recovery V9)
           const scanGroupsNames = async () => {
@@ -631,29 +656,37 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
                }
              }
           };
-          // 3. ACTUALISATION GLOBALE DES CONTACTS (Noms et Photos)
+          // 3. ACTUALISATION GLOBALE DES CONTACTS (Noms seulement — avatars gérés par scanAvatars)
+          // FIXED: removed profilePictureUrl() from here to avoid:
+          //   (a) duplication with scanAvatars()
+          //   (b) storing expiring CDN URLs instead of permanent Supabase Storage URLs
           const refreshAllContactsMetadata = async () => {
              try {
-                const { data: cts } = await supabase.from('contacts').select('external_id, display_name').eq('account_id', accountId);
-                if (!cts?.length) return;
-                
-                logger.info(`[WA-REFRESH] Refreshing metadata for ${cts.length} contacts...`);
+                // Only refresh contacts that have no display_name yet (still showing raw JID)
+                const { data: cts } = await supabase.from('contacts')
+                  .select('external_id, display_name')
+                  .eq('account_id', accountId)
+                  .not('external_id', 'like', '%@lid')
+                  .not('external_id', 'like', '%@g.us')
+                  .or('display_name.is.null,display_name.like.%@s.whatsapp.net')
+                  .limit(100);
+                if (!cts?.length) { logger.info('[WA-REFRESH] All contacts already have names.'); return; }
+
+                logger.info(`[WA-REFRESH] Refreshing names for ${cts.length} contacts without display_name...`);
                 for (const c of cts) {
                    if (!sock) break;
                    try {
-                      const ppUrl = await sock.profilePictureUrl(c.external_id, 'image').catch(() => null);
-                      const latestContact = await sock.onWhatsApp(c.external_id).catch(() => []);
-                      
-                      const updates = {};
-                      if (ppUrl) updates.avatar_url = ppUrl;
-                      
-                      if (Object.keys(updates).length > 0) {
-                         await supabase.from('contacts').update(updates).eq('account_id', accountId).eq('external_id', c.external_id);
+                      // onWhatsApp returns verified name / push name
+                      const [info] = await sock.onWhatsApp(c.external_id).catch(() => []);
+                      if (info?.verifiedName || info?.name) {
+                         await supabase.from('contacts').update({
+                           display_name: info.verifiedName || info.name
+                         }).eq('account_id', accountId).eq('external_id', c.external_id);
                       }
                    } catch (e) {}
-                   await delay(2000); // Rate limit strict
+                   await delay(1000); // Rate limit (names API is lighter than photo API)
                 }
-                logger.info('[WA-REFRESH] All contact metadata refreshed.');
+                logger.info('[WA-REFRESH] Contact name refresh complete.');
              } catch (e) {
                 logger.error('[WA-REFRESH-ERR]', e.message);
              }
@@ -1138,13 +1171,25 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
 
             logger.info(`[WA-CASCADE-SYNC] Requesting history for ${conv.external_id} (${msgCount || 0} msgs, cursor: ${oldestMsg?.remote_id || 'none'})`);
 
+            // BUG FIX: fetchMessageHistory crashes with "Cannot read properties of undefined (reading 'remoteJid')"
+            // when cursor is undefined (0 msgs). Baileys v7 requires a valid cursor or explicit null.
+            // For convs with 0 msgs: mark complete immediately — WA can't give us history without a starting point.
+            if (!oldestMsg) {
+              logger.info(`[WA-CASCADE-SYNC] ${conv.external_id}: 0 messages — marking complete (no cursor available).`);
+              await supabase.from('conversations').update({
+                metadata: { ...(conv.metadata || {}), history_sync_complete: true, history_sync_requested_at: new Date().toISOString() }
+              }).eq('id', conv.id);
+              await delay(500);
+              continue;
+            }
+
             try {
-              const cursor = oldestMsg ? {
+              const cursor = {
                 key: { id: oldestMsg.remote_id, remoteJid: conv.external_id, fromMe: false },
                 messageTimestamp: Math.floor(new Date(oldestMsg.timestamp).getTime() / 1000)
-              } : undefined;
+              };
 
-              await sock.fetchMessageHistory(50, cursor, cursor?.messageTimestamp).catch(e => {
+              await sock.fetchMessageHistory(50, cursor, cursor.messageTimestamp).catch(e => {
                 logger.warn(`[WA-CASCADE-SYNC] fetchMessageHistory failed for ${conv.external_id}: ${e.message}`);
               });
             } catch (e) {
