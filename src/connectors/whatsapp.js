@@ -167,9 +167,13 @@ const extractContent = (message) => {
   return message.conversation
     || message.extendedTextMessage?.text
     || message.imageMessage?.caption
+    || (message.imageMessage ? '📷 Photo' : null)
     || message.videoMessage?.caption
+    || (message.videoMessage ? '🎬 Vidéo' : null)
+    || message.audioMessage?.caption
+    || (message.audioMessage ? '🎵 Audio' : null)
     || message.documentMessage?.fileName
-    || (message.audioMessage ? '🎵 Message audio' : null)
+    || (message.documentMessage ? '📄 Document' : null)
     || (message.stickerMessage ? '🎭 Sticker' : null)
     || (message.buttonsResponseMessage?.selectedButtonId ? `🔘 Bouton: ${message.buttonsResponseMessage.selectedDisplayText}` : null)
     || (message.listResponseMessage?.title ? `📋 Liste: ${message.listResponseMessage.title}` : null)

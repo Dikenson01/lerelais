@@ -89,6 +89,7 @@ export default function App() {
 
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
+  const [callingContact, setCallingContact] = useState(null);
 
   // ── Auth Init ───────────────────────────────────────────────
   useEffect(() => {
@@ -212,13 +213,33 @@ export default function App() {
   // Resolve sender ID to display name using contacts list
   const resolveContactName = useCallback((senderId) => {
     if (!senderId) return 'Inconnu';
-    const contact = contacts.find(c => c.external_id === senderId);
+    
+    // 1. Direct match
+    let contact = contacts.find(c => c.external_id === senderId);
+    
+    // 2. ID-only match (handle s.whatsapp.net vs lid)
+    if (!contact) {
+      const pureId = senderId.split('@')[0];
+      contact = contacts.find(c => c.external_id?.startsWith(pureId));
+    }
+
     if (contact?.display_name) return contact.display_name;
+    
     // Fallback: extract phone number from JID
     const phone = senderId.split('@')[0];
     if (phone && phone.length > 5) return `+${phone}`;
     return senderId;
   }, [contacts]);
+
+  const startCall = (conv) => {
+    const c = Array.isArray(conv.contacts) ? conv.contacts[0] : conv.contacts;
+    const phone = c?.phone_number || conv.external_id?.split('@')[0];
+    if (phone) {
+      // Redirect to WhatsApp calling if possible, or just wa.me
+      window.open(`https://wa.me/${phone}`, '_blank');
+      setCallingContact({ name: getDisplayName(conv), phone, avatar: getAvatar(conv) });
+    }
+  };
 
   if (!authReady) return <div className="lx-screen"><Loader2 className="spinner" size={40}/></div>;
   if (!user) return <AuthScreen onAuth={setUser} />;
@@ -291,7 +312,7 @@ export default function App() {
                 <span className="status">WhatsApp • {selectedConv.is_group && selectedConv.group_metadata?.participants ? `${selectedConv.group_metadata.participants.length} participants` : 'En ligne'}</span>
               </div>
               <div style={{marginLeft:'auto', display:'flex', gap:'12px'}}>
-                <button className="nav-item" style={{width:36, height:36}}><Phone size={18}/></button>
+                <button className="nav-item" style={{width:36, height:36}} onClick={() => startCall(selectedConv)}><Phone size={18}/></button>
                 <button className="nav-item" style={{width:36, height:36}}><MoreVertical size={18}/></button>
               </div>
             </header>
@@ -402,6 +423,37 @@ export default function App() {
           <button className={`nav-item ${view==='settings'?'active':''}`} onClick={()=>setView('settings')}><Settings size={24}/></button>
         </nav>
       )}
+
+      {/* CALLING MODAL */}
+      <AnimatePresence>
+        {callingContact && (
+          <motion.div 
+            className="modal-overlay" 
+            initial={{opacity:0}} animate={{opacity:1}} exit={{opacity:0}}
+            style={{zIndex:2000, background:'rgba(0,0,0,0.85)', backdropFilter:'blur(20px)'}}
+          >
+            <motion.div 
+              className="calling-card"
+              initial={{scale:0.9, y:20}} animate={{scale:1, y:0}} exit={{scale:0.9, y:20}}
+            >
+              <div className="pulse-container">
+                <div className="pulse-ring"/>
+                <div className="pulse-ring" style={{animationDelay:'1s'}}/>
+                <div className="pulse-avatar">
+                   {callingContact.avatar ? <img src={callingContact.avatar} alt=""/> : <User size={48}/>}
+                </div>
+              </div>
+              <h2 style={{marginTop:30, fontSize:28}}>{callingContact.name}</h2>
+              <p style={{color:'var(--accent-green)', fontWeight:600, letterSpacing:1.5, marginTop:10}}>APPEL EN COURS...</p>
+              <p style={{marginTop:40, color:'var(--text-dim)'}}>+{callingContact.phone}</p>
+              
+              <button className="hangup-btn" onClick={() => setCallingContact(null)}>
+                <X size={32}/>
+              </button>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
