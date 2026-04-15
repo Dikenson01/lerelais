@@ -337,11 +337,12 @@ export default function App() {
   const startCall = (conv) => {
     const c = Array.isArray(conv.contacts) ? conv.contacts[0] : conv.contacts;
     const phone = c?.phone_number || conv.external_id?.split('@')[0];
-    if (phone) {
-      // Redirect to WhatsApp calling if possible, or just wa.me
-      window.open(`https://wa.me/${phone}`, '_blank');
-      setCallingContact({ name: getDisplayName(conv), phone, avatar: getAvatar(conv) });
+    if (!phone || conv.external_id?.endsWith('@lid')) {
+      // @lid contacts: can't resolve phone number — show info only
+      setCallingContact({ name: getDisplayName(conv), phone: null, avatar: getAvatar(conv) });
+      return;
     }
+    setCallingContact({ name: getDisplayName(conv), phone, avatar: getAvatar(conv) });
   };
 
   if (!authReady) return <div className="lx-screen"><Loader2 className="spinner" size={40}/></div>;
@@ -496,34 +497,58 @@ export default function App() {
                 isAtBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
               }}
             >
-              {messages.map(msg => (
-                <div key={msg.id} className={`msg-bubble ${msg.is_from_me?'me':'them'}`}>
+              {messages.map(msg => {
+                const hasText = msg.content && !msg.content.startsWith('[');
+                const hasMedia = !!msg.media_url;
+                const isMediaOnly = hasMedia && !hasText && !msg.metadata?.quoted;
+                const side = msg.is_from_me ? 'me' : 'them';
+                return (
+                <div key={msg.id} className={`msg-bubble ${side}${isMediaOnly ? ' media-only' : ''}`}>
                   {/* Sender name for group chats */}
                   {selectedConv?.is_group && !msg.is_from_me && (
                     <div className="msg-sender">{msg.metadata?.pushName || resolveContactName(msg.sender_id, msg.metadata?.participant)}</div>
                   )}
+                  {/* Quoted message */}
                   {msg.metadata?.quoted && (
                     <div className="quoted-box">
                       <strong>{msg.metadata.quoted.sender?.split('@')[0]}</strong>
                       <p>{msg.metadata.quoted.content}</p>
                     </div>
                   )}
-                  {msg.media_url ? (
-                    <img 
-                      src={msg.media_url} 
-                      alt={msg.media_type || 'media'}
-                      className="msg-media"
-                      onError={(e) => { e.target.style.display = 'none'; }}
-                      onClick={() => window.open(msg.media_url, '_blank')}
-                    />
-                  ) : null}
-                  {msg.content && !msg.content.startsWith('[') ? <span>{msg.content}</span> : null}
-                  {!msg.media_url && msg.media_type ? (
+                  {/* Media rendering — correct player per type */}
+                  {hasMedia ? (() => {
+                    const t = msg.media_type;
+                    if (t === 'audio') {
+                      return <audio controls className="msg-audio" src={msg.media_url} preload="metadata"/>;
+                    }
+                    if (t === 'video') {
+                      return (
+                        <video controls className="msg-video" src={msg.media_url} preload="metadata"
+                          onClick={e => e.stopPropagation()}/>
+                      );
+                    }
+                    if (t === 'sticker') {
+                      return <img src={msg.media_url} alt="sticker" style={{maxWidth:120, maxHeight:120, borderRadius:8, background:'none'}}
+                        onError={e => e.target.style.display='none'}/>;
+                    }
+                    // image / document / fallback
+                    return (
+                      <img src={msg.media_url} alt={t || 'media'} className="msg-media"
+                        onError={e => e.target.style.display='none'}
+                        onClick={() => window.open(msg.media_url, '_blank')}/>
+                    );
+                  })() : null}
+                  {/* Text content */}
+                  {hasText ? <span>{msg.content}</span> : null}
+                  {/* Placeholder when media_url not yet available */}
+                  {!hasMedia && msg.media_type ? (
                     <span style={{opacity:0.65, fontStyle:'italic'}}>
-                      {{'image':'📷 Photo', 'video':'🎬 Vidéo', 'audio':'🎵 Audio', 'document':'📄 Document', 'sticker':'🎭 Sticker'}[msg.media_type] || '📎 Média'}
+                      {{'image':'📷 Photo', 'video':'🎬 Vidéo', 'audio':'🎵 Message vocal', 'document':'📄 Document', 'sticker':'🎭 Sticker'}[msg.media_type] || '📎 Média'}
                     </span>
                   ) : null}
-                  {(msg.media_url && msg.content && !msg.content.startsWith('[')) ? <span className="media-caption">{msg.content}</span> : null}
+                  {/* Caption under media */}
+                  {(hasMedia && hasText) ? <span className="media-caption">{msg.content}</span> : null}
+                  {/* Reactions */}
                   {msg.metadata?.reactions && (
                     <div style={{display:'flex', gap:2, marginTop:4}}>
                       {Object.values(msg.metadata.reactions).map((emoji, i) => (
@@ -536,7 +561,8 @@ export default function App() {
                     {msg.is_from_me && <span style={{marginLeft:4}}>{msg.status==='read'?'✓✓':msg.status==='delivered'?'✓✓':'✓'}</span>}
                   </div>
                 </div>
-              ))}
+                );
+              })}
               <div ref={messagesEndRef} />
             </div>
 
@@ -607,12 +633,36 @@ export default function App() {
                 </div>
 
                 {/* Telegram — à venir */}
-                <div className="conv-card" style={{background:'var(--surface-100)', border:'1px dashed var(--border-muted)', opacity:0.5, cursor:'not-allowed'}}>
+                <div className="conv-card" style={{background:'var(--surface-100)', border:'1px dashed var(--border-muted)', opacity:0.5, cursor:'not-allowed', marginBottom:10}}>
                   <div style={{width:36,height:36,borderRadius:'50%',background:'#229ED9',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="white"><path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"/></svg>
                   </div>
                   <div className="conv-content">
                     <strong>Telegram</strong>
+                    <small style={{color:'var(--text-dim)'}}>Bientôt disponible</small>
+                  </div>
+                </div>
+
+                {/* Signal — à venir */}
+                <div className="conv-card" style={{background:'var(--surface-100)', border:'1px dashed var(--border-muted)', opacity:0.5, cursor:'not-allowed', marginBottom:10}}>
+                  <div style={{width:36,height:36,borderRadius:'50%',background:'#3A76F0',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+                    {/* Signal logo simplified */}
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="white"><path d="M12 0C5.374 0 0 5.373 0 12c0 2.023.52 3.925 1.433 5.582L.054 23.88l6.405-1.673A11.945 11.945 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm.174 18.784c-1.032 0-2.03-.18-2.96-.51l-3.04.836.85-2.97a6.781 6.781 0 01-1.178-3.838c0-3.774 3.084-6.836 6.886-6.836 3.8 0 6.884 3.062 6.884 6.836 0 3.773-3.084 6.836-6.886 6.836l.444-.354z"/></svg>
+                  </div>
+                  <div className="conv-content">
+                    <strong>Signal</strong>
+                    <small style={{color:'var(--text-dim)'}}>Bientôt disponible</small>
+                  </div>
+                </div>
+
+                {/* Snapchat — à venir */}
+                <div className="conv-card" style={{background:'var(--surface-100)', border:'1px dashed var(--border-muted)', opacity:0.5, cursor:'not-allowed'}}>
+                  <div style={{width:36,height:36,borderRadius:'50%',background:'#FFFC00',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+                    {/* Snapchat ghost icon */}
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="#000"><path d="M12.017 0C8.3 0 7.86.015 7.86.015 4.93.15 2.875 1.01 1.715 2.17.557 3.326-.002 4.866 0 8.006c0 .44.013 1.94.013 3.994C.013 16.11.013 16.543 0 16.994c.002 3.14.559 4.68 1.715 5.836C2.874 23.986 4.93 24.848 7.86 24.984c0 0 .44.016 4.157.016 3.716 0 4.14-.016 4.14-.016 2.928-.136 4.985-.998 6.143-2.154C23.454 21.672 24 20.13 24 16.994c0-.45-.013-1.94-.013-3.994C23.987 8 23.987 7.57 24 7.006 24 3.866 23.443 2.326 22.285 1.17 21.127.016 19.072-.847 16.142-.984 16.142-.984 15.72-1 12.017 0zm-.001 2.16c3.648 0 4.08.014 4.08.014 2.475.113 3.813.805 4.577 1.57.766.764 1.46 2.1 1.573 4.576.013.45.013 1.925.013 3.964v.003c0 2.04 0 3.516-.013 3.965-.113 2.476-.807 3.81-1.573 4.576-.764.764-2.102 1.457-4.577 1.57-.4.014-4.08.014-4.08.014s-3.698 0-4.095-.013c-2.476-.112-3.814-.806-4.578-1.57C3.36 20.094 2.667 18.76 2.554 16.283c-.013-.45-.013-1.925-.013-3.965v-.003c0-2.04 0-3.515.013-3.964.113-2.476.807-3.812 1.57-4.576.766-.766 2.103-1.458 4.579-1.571.395-.013 4.08-.013 4.08-.013s.234-.03.233-.03z"/></svg>
+                  </div>
+                  <div className="conv-content">
+                    <strong>Snapchat</strong>
                     <small style={{color:'var(--text-dim)'}}>Bientôt disponible</small>
                   </div>
                 </div>
@@ -636,28 +686,78 @@ export default function App() {
       {/* CALLING MODAL */}
       <AnimatePresence>
         {callingContact && (
-          <motion.div 
-            className="modal-overlay" 
+          <motion.div
+            className="modal-overlay"
             initial={{opacity:0}} animate={{opacity:1}} exit={{opacity:0}}
             style={{zIndex:2000, background:'rgba(0,0,0,0.85)', backdropFilter:'blur(20px)'}}
+            onClick={() => setCallingContact(null)}
           >
-            <motion.div 
+            <motion.div
               className="calling-card"
               initial={{scale:0.9, y:20}} animate={{scale:1, y:0}} exit={{scale:0.9, y:20}}
+              onClick={e => e.stopPropagation()}
             >
+              {/* Avatar */}
               <div className="pulse-container">
                 <div className="pulse-ring"/>
-                <div className="pulse-ring" style={{animationDelay:'1s'}}/>
+                <div className="pulse-ring" style={{animationDelay:'0.8s'}}/>
                 <div className="pulse-avatar">
-                   {callingContact.avatar ? <img src={callingContact.avatar} alt=""/> : <User size={48}/>}
+                  {callingContact.avatar ? <img src={callingContact.avatar} alt=""/> : <User size={48}/>}
                 </div>
               </div>
-              <h2 style={{marginTop:30, fontSize:28}}>{callingContact.name}</h2>
-              <p style={{color:'var(--accent-green)', fontWeight:600, letterSpacing:1.5, marginTop:10}}>APPEL EN COURS...</p>
-              <p style={{marginTop:40, color:'var(--text-dim)'}}>+{callingContact.phone}</p>
-              
-              <button className="hangup-btn" onClick={() => setCallingContact(null)}>
-                <X size={32}/>
+
+              <h2 style={{marginTop:28, fontSize:26}}>{callingContact.name}</h2>
+
+              {callingContact.phone ? (
+                <>
+                  <p style={{color:'var(--text-dim)', marginTop:6, fontSize:14}}>
+                    +{callingContact.phone.replace(/^\+/, '')}
+                  </p>
+                  <p style={{color:'var(--text-secondary)', fontSize:12, marginTop:6, marginBottom:28, maxWidth:280, lineHeight:1.5}}>
+                    Choisissez le protocole d'appel depuis le Relais :
+                  </p>
+
+                  {/* WhatsApp call — VoIP, uses WiFi/4G data */}
+                  <a
+                    href={`https://wa.me/${callingContact.phone.replace(/^\+/, '')}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{display:'flex', alignItems:'center', gap:14, background:'#25D366', color:'white', padding:'14px 28px', borderRadius:16, marginBottom:12, textDecoration:'none', fontWeight:600, fontSize:15, width:'100%', maxWidth:280}}
+                  >
+                    {/* WhatsApp icon */}
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="white"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/><path d="M12 0C5.373 0 0 5.373 0 12c0 2.117.554 4.103 1.523 5.824L.057 23.882l6.233-1.635A11.945 11.945 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 21.818c-1.961 0-3.79-.527-5.364-1.446l-.384-.228-3.984 1.045 1.063-3.878-.25-.398A9.796 9.796 0 012.182 12C2.182 6.57 6.57 2.182 12 2.182S21.818 6.57 21.818 12 17.43 21.818 12 21.818z"/></svg>
+                    <div style={{textAlign:'left'}}>
+                      <div>Appel WhatsApp</div>
+                      <div style={{fontSize:11, fontWeight:400, opacity:0.85}}>WiFi / 4G — données mobiles</div>
+                    </div>
+                  </a>
+
+                  {/* Classic phone call */}
+                  <a
+                    href={`tel:+${callingContact.phone.replace(/^\+/, '')}`}
+                    style={{display:'flex', alignItems:'center', gap:14, background:'var(--surface-200)', color:'white', padding:'14px 28px', borderRadius:16, marginBottom:32, textDecoration:'none', fontWeight:600, fontSize:15, width:'100%', maxWidth:280, border:'1px solid var(--border-active)'}}
+                  >
+                    <Phone size={22} color="var(--accent-gold)"/>
+                    <div style={{textAlign:'left'}}>
+                      <div>Appel téléphonique</div>
+                      <div style={{fontSize:11, fontWeight:400, opacity:0.6}}>Réseau GSM classique</div>
+                    </div>
+                  </a>
+                </>
+              ) : (
+                /* No phone available — @lid contact */
+                <div style={{margin:'20px 0 32px', color:'var(--text-secondary)', fontSize:13, maxWidth:260, lineHeight:1.6, textAlign:'center'}}>
+                  <p>Numéro de téléphone indisponible pour ce contact.</p>
+                  <p style={{marginTop:8, fontSize:12, color:'var(--text-dim)'}}>WhatsApp masque le numéro de certains contacts via son système LID. L'appel sera disponible dès que le numéro est résolu.</p>
+                </div>
+              )}
+
+              {/* Close / Annuler */}
+              <button
+                onClick={() => setCallingContact(null)}
+                style={{color:'var(--text-dim)', fontSize:13, marginTop:4, background:'none', border:'none', cursor:'pointer'}}
+              >
+                Annuler
               </button>
             </motion.div>
           </motion.div>
