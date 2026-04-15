@@ -88,6 +88,7 @@ export default function App() {
   const [pairingId, setPairingId] = useState(null);
 
   const messagesEndRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   // ── Auth Init ───────────────────────────────────────────────
   useEffect(() => {
@@ -140,7 +141,22 @@ export default function App() {
     try {
       await axios.post(`${API}/messages`, { conversationId: selectedConv.id, content: txt });
       fetchMessages(selectedConv.id);
+      preloadData(); // Refresh sidebar preview
     } catch (err) { alert('Erreur envoi'); setNewMessage(txt); }
+  };
+
+  const sendMedia = async (file) => {
+    if (!file || !selectedConv) return;
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('conversationId', selectedConv.id);
+    try {
+      await axios.post(`${API}/messages/media`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+      fetchMessages(selectedConv.id);
+      preloadData();
+    } catch (err) { alert('Erreur envoi média: ' + (err.response?.data?.error || err.message)); }
   };
 
   const startWAPairing = async () => {
@@ -272,6 +288,10 @@ export default function App() {
             <div className="messages-area">
               {messages.map(msg => (
                 <div key={msg.id} className={`msg-bubble ${msg.is_from_me?'me':'them'}`}>
+                  {/* Sender name for group chats */}
+                  {selectedConv?.is_group && !msg.is_from_me && (
+                    <div className="msg-sender">{msg.metadata?.pushName || msg.sender_id?.split('@')[0] || 'Inconnu'}</div>
+                  )}
                   {msg.metadata?.quoted && (
                     <div className="quoted-box">
                       <strong>{msg.metadata.quoted.sender?.split('@')[0]}</strong>
@@ -312,7 +332,14 @@ export default function App() {
 
             <footer className="chat-footer">
               <form className="input-group" onSubmit={sendText}>
-                <button type="button" className="media-btn"><Paperclip size={20}/></button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*,video/*,audio/*,.pdf,.doc,.docx"
+                  style={{display:'none'}}
+                  onChange={(e) => { if (e.target.files[0]) { sendMedia(e.target.files[0]); e.target.value=''; } }}
+                />
+                <button type="button" className="media-btn" onClick={() => fileInputRef.current?.click()}><Paperclip size={20}/></button>
                 <input placeholder="Écrire un message..." value={newMessage} onChange={e=>setNewMessage(e.target.value)} />
                 <button type="button" className="media-btn"><Smile size={20}/></button>
                 <button type="submit" className="send-btn"><Send size={18}/></button>

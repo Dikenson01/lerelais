@@ -10,3 +10,4 @@ qr.png
 .ngrok
 localtunnel_url.txt
 web/vite.config.js.timestamp*.mjs
+scratch/
