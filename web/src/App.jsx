@@ -215,14 +215,33 @@ export default function App() {
     return url || null;
   };
 
+  const formatName = (str) => {
+    if (!str) return 'Inconnu';
+    const clean = str.split('@')[0].replace(/[+\s-]/g, '');
+    
+    // Si c'est un numéro de téléphone probable
+    if (/^\d{10,15}$/.test(clean)) {
+       if (clean.startsWith('33')) {
+         return `+33 ${clean.slice(2,3)} ${clean.slice(3,5)} ${clean.slice(5,7)} ${clean.slice(7,9)} ${clean.slice(9,11)}`;
+       }
+       return `+${clean}`;
+    }
+
+    // Si c'veut un ID technique (@lid ou numéro trop long sans structure)
+    if (str.includes('@lid') || /^\d{16,}$/.test(clean)) {
+       return 'Utilisateur WhatsApp';
+    }
+
+    return str;
+  };
+
   const getDisplayName = (conv) => {
     const c = Array.isArray(conv.contacts) ? conv.contacts[0] : conv.contacts;
     if (c?.display_name) {
-       // Si le nom est juste un ID numérique, on essaie de formater ou garder le title
-       const isNumeric = /^\d+$/.test(c.display_name.replace(/[+\s-]/g, ''));
-       if (!isNumeric || !conv.title) return c.display_name;
+       const isId = /^\d{16,}$/.test(c.display_name.replace(/[+\s-]/g, '')) || c.display_name.includes('@');
+       if (!isId) return c.display_name;
     }
-    return conv.title || conv.external_id?.split('@')[0] || 'Inconnu';
+    return conv.title ? formatName(conv.title) : formatName(conv.external_id);
   };
 
   const toggleArchive = async (conv) => {
@@ -238,21 +257,18 @@ export default function App() {
     const idToSearch = participantId || senderId;
     if (!idToSearch) return 'Inconnu';
     
-    // 1. Direct match
     let contact = contacts.find(c => c.external_id === idToSearch);
-    
-    // 2. ID-only match (handle s.whatsapp.net vs lid)
     if (!contact) {
       const pureId = idToSearch.split('@')[0];
       contact = contacts.find(c => c.external_id?.startsWith(pureId));
     }
 
-    if (contact?.display_name) return contact.display_name;
+    if (contact?.display_name) {
+       const isId = /^\d{16,}$/.test(contact.display_name.replace(/[+\s-]/g, '')) || contact.display_name.includes('@');
+       if (!isId) return contact.display_name;
+    }
     
-    // Fallback: extract phone number from JID
-    const phone = idToSearch.split('@')[0];
-    if (phone && phone.length > 5) return `+${phone}`;
-    return idToSearch;
+    return formatName(idToSearch);
   }, [contacts]);
 
   const startCall = (conv) => {
