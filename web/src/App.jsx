@@ -102,7 +102,10 @@ export default function App() {
   useEffect(() => {
     const t = getToken();
     if (!t) { setAuthReady(true); return; }
-    axios.get(`${API}/auth/me`).then(r => { setUser(r.data); setAuthReady(true); }).catch(() => { clearToken(); setAuthReady(true); });
+    axios.get(`${API}/auth/me`).then(r => { setUser(r.data); setAuthReady(true); }).catch((err) => { 
+      if (err.response?.status !== 401) { /* log error */ }
+      clearToken(); setAuthReady(true); 
+    });
   }, []);
 
   useEffect(() => {
@@ -117,11 +120,11 @@ export default function App() {
       const [c, ct, ac] = await Promise.all([
         axios.get(`${API}/conversations`),
         axios.get(`${API}/contacts`),
-        axios.get(`${API}/accounts`)
+        axios.get(`${API}/accounts`).catch(() => ({ data: [] }))
       ]);
-      setConversations(c.data);
-      setContacts(ct.data);
-      setAccounts(ac.data);
+      setConversations(c.data || []);
+      setContacts(ct.data || []);
+      setAccounts(ac.data || []);
     } catch (e) {} finally { setLoading(false); }
   }, []);
 

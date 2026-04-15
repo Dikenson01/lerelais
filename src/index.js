@@ -129,6 +129,20 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
+// Infos utilisateur courant
+app.get('/api/auth/me', async (req, res) => {
+  try {
+    const { data: user, error } = await supabase.from('relais_users')
+      .select('id, email, display_name, avatar_url')
+      .eq('id', req.userId)
+      .single();
+    if (error || !user) return res.status(404).json({ error: 'Utilisateur non trouvé' });
+    res.json({ id: user.id, username: user.email, displayName: user.display_name, avatarUrl: user.avatar_url });
+  } catch (err) {
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
 // Déconnexion (token supprimé côté client, on log juste)
 app.post('/api/auth/logout', async (req, res) => {
   const authHeader = req.headers['authorization'];
