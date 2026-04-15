@@ -17,8 +17,9 @@ export async function connectToInstagram(accountId, username, password, onMessag
 
     // Simulate mobile app request headers
     await ig.simulate.preLoginFlow();
-    await new Promise(r => setTimeout(r, 2000)); // Wait 2s to look more human
+    await new Promise(r => setTimeout(r, 3000)); // Safer wait
     const auth = await ig.account.login(username, password);
+    await new Promise(r => setTimeout(r, 1000));
     await ig.simulate.postLoginFlow();
 
     logger.info(`[IG] Connected as ${username}`);

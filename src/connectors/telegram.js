@@ -142,6 +142,10 @@ export const verifyTelegramCode = async (accountId, code, password2fa = null) =>
   const { client, phone, phoneCodeHash } = session;
 
   try {
+    if (!client.connected) {
+      logger.info(`[TG-VERIFY] Reconnecting client for ${phone}...`);
+      await client.connect();
+    }
     await client.invoke(
       new Api.auth.SignIn({
         phoneNumber: phone,
