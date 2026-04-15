@@ -39,7 +39,7 @@ const PLATFORMS = [
   { name: 'Signal',    color: '#3A76F0', icon: '🔒' },
 ];
 
-function AuthScreen({ onAuth }) {
+const AuthScreen = ({ onAuth }) => {
   const cardRef = useRef(null);
   const rafRef  = useRef(null);
   const [tilt,    setTilt]    = useState({ x: 0, y: 0 });
@@ -52,7 +52,7 @@ function AuthScreen({ onAuth }) {
   const [error,    setError]    = useState('');
   const [loading,  setLoading]  = useState(false);
 
-  useEffect(() => { const t = setTimeout(() => setMounted(true), 80); return () => clearTimeout(t); }, []);
+  useEffect(() => { const t = setTimeout(() => setMounted(true), 100); return () => clearTimeout(t); }, []);
 
   const track = (cx, cy) => {
     if (!cardRef.current) return;
@@ -60,13 +60,13 @@ function AuthScreen({ onAuth }) {
     const x = cx - r.left, y = cy - r.top;
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
     rafRef.current = requestAnimationFrame(() => {
-      setTilt({ x: ((y - r.height / 2) / (r.height / 2)) * -8, y: ((x - r.width / 2) / (r.width / 2)) * 8 });
+      setTilt({ x: ((y - r.height / 2) / (r.height / 2)) * -6, y: ((x - r.width / 2) / (r.width / 2)) * 6 });
       setGlow({ x: (x / r.width) * 100, y: (y / r.height) * 100, on: true });
     });
   };
 
   const onMove  = e => track(e.clientX, e.clientY);
-  const onTouch = e => e.touches[0] && track(e.touches[0].clientX, e.touches[0].clientY);
+  const onTouch = e => { if(e.touches[0]) track(e.touches[0].clientX, e.touches[0].clientY); };
   const onLeave = () => { setTilt({ x: 0, y: 0 }); setGlow(g => ({ ...g, on: false })); };
 
   const submit = async (e) => {
@@ -76,97 +76,84 @@ function AuthScreen({ onAuth }) {
       const body = mode === 'login' ? { username, password } : { username, password, displayName: name };
       const { data } = await axios.post(url, body);
       setToken(data.token); onAuth(data.user);
-    } catch (err) { setError(err.response?.data?.error || 'Erreur de connexion'); }
+    } catch (err) { setError(err.response?.data?.error || 'Erreur d\'identification'); }
     finally { setLoading(false); }
   };
 
   return (
-    <div className="hub-screen">
-      {/* Mesh gradient background animé */}
-      <div className="hub-mesh" />
+    <div className="lx-screen">
+      <div className="lx-atmo" />
+      <div className="lx-grain" />
 
-      {/* Orbes flottants */}
-      <div className="hub-orb hub-orb-1" />
-      <div className="hub-orb hub-orb-2" />
-      <div className="hub-orb hub-orb-3" />
-
-      {/* Carte principale */}
-      <div
+      <motion.div
         ref={cardRef}
-        className={`hub-card ${mounted ? 'hub-card--in' : ''}`}
+        className={`lx-card ${mounted ? 'active' : ''}`}
         style={{
-          transform: `perspective(1000px) rotateX(${tilt.x}deg) rotateY(${tilt.y}deg) scale(${glow.on ? 1.015 : 1})`,
-          transition: glow.on ? 'transform 0.08s linear' : 'transform 0.65s cubic-bezier(0.23, 1, 0.32, 1)',
+          transform: `perspective(1000px) rotateX(${tilt.x}deg) rotateY(${tilt.y}deg)`,
+          opacity: mounted ? 1 : 0,
+          translateY: mounted ? 0 : 40
         }}
         onMouseMove={onMove} onMouseLeave={onLeave}
         onTouchMove={onTouch} onTouchEnd={onLeave}
       >
-        {/* Glow curseur */}
-        <div className="hub-cursor-glow" style={{
-          background: `radial-gradient(300px circle at ${glow.x}% ${glow.y}%, rgba(99,102,241,0.12), transparent 70%)`,
-          opacity: glow.on ? 1 : 0,
+        <div className="lx-edge" />
+        <div className="lx-light" style={{
+          background: `radial-gradient(400px circle at ${glow.x}% ${glow.y}%, rgba(210, 178, 120, 0.08), transparent 80%)`,
+          opacity: glow.on ? 1 : 0
         }} />
 
-        {/* Header */}
-        <div className="hub-header">
-          <div className="hub-logo-wrap">
-            <img src={logoHub} alt="LeRelais" className="hub-logo" />
-            <div className="hub-logo-pulse" />
-          </div>
-          <div className="hub-brand">
-            <h1 className="hub-name">LeRelais</h1>
-            <p className="hub-sub">Toutes vos messageries, un seul endroit</p>
-          </div>
+        <div className="lx-logo-wrap">
+          <img src={logoHub} alt="Logo" className="lx-logo-img" />
+          <div className="lx-logo-ring" />
         </div>
 
-        {/* Plateformes connectées */}
-        <div className="hub-platforms">
-          {PLATFORMS.map(p => (
-            <div key={p.name} className="hub-platform" title={p.name}>
-              <span className="hub-platform-dot" style={{ background: p.color }} />
-              <span className="hub-platform-name">{p.name}</span>
-            </div>
-          ))}
+        <header className="lx-brand">
+          <h1 className="lx-name">LeRelais</h1>
+          <p className="lx-tagline">Elite Unified Messenger</p>
+        </header>
+
+        <div className="lx-divider">
+          <span /><Lock size={10} /><span />
         </div>
 
-        {/* Separator */}
-        <div className="hub-sep" />
-
-        {/* Tabs */}
-        <div className="hub-tabs">
-          <button className={`hub-tab${mode === 'login' ? ' active' : ''}`} onClick={() => { setMode('login'); setError(''); }}>
-            Connexion
-          </button>
-          <button className={`hub-tab${mode === 'register' ? ' active' : ''}`} onClick={() => { setMode('register'); setError(''); }}>
-            Inscription
-          </button>
+        <div className="lx-tabs">
+          <button className={`lx-tab ${mode==='login'?'active':''}`} onClick={()=>setMode('login')}>Authentification</button>
+          <button className={`lx-tab ${mode==='register'?'active':''}`} onClick={()=>setMode('register')}>Enregistrement</button>
         </div>
 
-        {/* Form */}
-        <form onSubmit={submit} className="hub-form">
+        <form className="lx-form" onSubmit={submit}>
           {mode === 'register' && (
-            <div className="hub-field">
-              <User size={15} className="hub-field-icon" />
-              <input className="hub-input" placeholder="Prénom" value={name} onChange={e => setName(e.target.value)} />
+            <div className="lx-field">
+              <label className="lx-label">Nom complet</label>
+              <input className="lx-input" placeholder="Ex: Jean Dupont" value={name} onChange={e=>setName(e.target.value)} required />
             </div>
           )}
-          <div className="hub-field">
-            <Mail size={15} className="hub-field-icon" />
-            <input className="hub-input" type="text" placeholder="Identifiant" value={username} onChange={e => setUsername(e.target.value)} required autoComplete="username" />
+          <div className="lx-field">
+            <label className="lx-label">Identifiant</label>
+            <input className="lx-input" placeholder="nom d'utilisateur" value={username} onChange={e=>setUsername(e.target.value)} required autoComplete="username" />
           </div>
-          <div className="hub-field">
-            <Lock size={15} className="hub-field-icon" />
-            <input className="hub-input" type="password" placeholder="Mot de passe" value={password} onChange={e => setPass(e.target.value)} required autoComplete="current-password" />
+          <div className="lx-field">
+            <label className="lx-label">Code secret</label>
+            <input className="lx-input" type="password" placeholder="••••••••" value={password} onChange={e=>setPass(e.target.value)} required autoComplete="current-password" />
           </div>
-          {error && <p className="hub-error">{error}</p>}
-          <button type="submit" className="hub-btn" disabled={loading}>
-            {loading ? <Loader2 size={16} className="spinner" /> : mode === 'login' ? 'Se connecter' : 'Créer mon compte'}
+
+          {error && <div className="lx-error">{error}</div>}
+
+          <button type="submit" className="lx-btn" disabled={loading}>
+            <div className="lx-btn-shimmer" />
+            <span className="lx-btn-label">
+              {loading ? <Loader2 className="spinner" size={14} /> : mode==='login'?'Entrer dans le Hub':'Créer un compte'}
+            </span>
           </button>
         </form>
-      </div>
+
+        <footer className="lx-platforms">
+          Connecté à WhatsApp &bull; Instagram &bull; Telegram
+        </footer>
+      </motion.div>
     </div>
   );
-}
+};
 
 // ─── Audio Recorder Hook ──────────────────────────────────────
 function useAudioRecorder(onStop) {
