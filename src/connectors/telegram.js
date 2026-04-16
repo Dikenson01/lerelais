@@ -165,7 +165,12 @@ export const verifyTelegramCode = async (accountId, code, password2fa = null) =>
         tgSessions.set(accountId, { ...session, step: '2fa' });
         return { step: '2fa' };
       }
-      await client.signInWithPassword({ apiId, apiHash }, { password: password2fa });
+      logger.info(`[TG-VERIFY] 2FA password provided for +${phone}.`);
+      await client.signIn({
+        phoneNumber: phone,
+        password: async () => password2fa,
+        onError: (e) => { throw e; }
+      });
     } else if (msg.includes('PHONE_CODE_INVALID')) {
       throw new Error('Code incorrect. Réessayez.');
     } else if (msg.includes('PHONE_CODE_EXPIRED')) {
