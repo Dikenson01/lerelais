@@ -1,0 +1,11 @@
+{
+  "$schema": "https://railway.app/v1.schema.json",
+  "build": {
+    "builder": "NIXPACKS",
+    "buildCommand": "npm run build"
+  },
+  "deploy": {
+    "startCommand": "node src/index.js",
+    "numReplicas": 1
+  }
+}
