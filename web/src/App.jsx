@@ -118,6 +118,9 @@ export default function App() {
   const [signalCode, setSignalCode] = useState('');
   const [signalError, setSignalError] = useState('');
   const [activeNetwork, setActiveNetwork] = useState(null); // 'whatsapp' | 'telegram' | 'instagram' | 'signal'
+  
+  // UI Grouping & Filtering (V48)
+  const [filter, setFilter] = useState({ type: 'all', network: null, accountId: null });
 
   const messagesEndRef = useRef(null);
   const messagesAreaRef = useRef(null);
@@ -436,11 +439,16 @@ export default function App() {
       if (view === 'inbox') return !c.metadata?.is_archived;
       return true;
     }).filter(c => {
+      // Grouping Filters (V48)
+      if (filter.type === 'network') return c.platform === filter.network;
+      if (filter.type === 'account') return c.account_id === filter.accountId;
+      return true; // type: 'all'
+    }).filter(c => {
       if (!searchQuery) return true;
       const q = searchQuery.toLowerCase();
       return c.title?.toLowerCase().includes(q) || c.external_id?.includes(q);
     });
-  }, [conversations, view, searchQuery]);
+  }, [conversations, view, searchQuery, filter]);
 
   const getAvatar = (conv) => {
     if (!conv) return null;
@@ -580,13 +588,22 @@ export default function App() {
       {!isMobile && (
         <nav className="nav-rail">
           <div className="brand-icon"><img src={logoHub} alt="" style={{width:'100%', borderRadius:'12px'}}/></div>
-          <button className={`nav-item ${view==='inbox'?'active':''}`} onClick={()=>setView('inbox')} title="Messages"><MessageSquare size={22}/></button>
+          
+          <div className="nav-group-label" style={{fontSize:10, color:'var(--text-dim)', marginBottom:12, textAlign:'center'}}>GLOBAL</div>
+          <button className={`nav-item ${(view==='inbox' && filter.type==='all')?'active':''}`} onClick={()=>{setView('inbox'); setFilter({type:'all'})}} title="Toutes les boites"><MessageSquare size={22}/></button>
           <button className={`nav-item ${view==='archive'?'active':''}`} onClick={()=>setView('archive')} title="Archives"><Archive size={22}/></button>
-          <button className={`nav-item ${view==='contacts'?'active':''}`} onClick={()=>setView('contacts')} title="Contacts"><Users size={22}/></button>
-          <button className={`nav-item ${view==='settings'?'active':''}`} onClick={()=>setView('settings')} title="Paramètres"><Settings size={22}/></button>
+          
+          <div className="nav-group-label" style={{fontSize:10, color:'var(--text-dim)', marginTop:20, marginBottom:12, textAlign:'center'}}>RÉSEAUX</div>
+          <button className={`nav-item ${(filter.network==='whatsapp')?'active':''}`} onClick={()=>{setView('inbox'); setFilter({type:'network', network:'whatsapp'})}} title="WhatsApp"><div className="platform-dot whatsapp" style={{position:'relative', left:0, bottom:0, width:14, height:14}}/></button>
+          <button className={`nav-item ${(filter.network==='telegram')?'active':''}`} onClick={()=>{setView('inbox'); setFilter({type:'network', network:'telegram'})}} title="Telegram"><div className="platform-dot telegram" style={{position:'relative', left:0, bottom:0, width:14, height:14}}/></button>
+          <button className={`nav-item ${(filter.network==='instagram')?'active':''}`} onClick={()=>{setView('inbox'); setFilter({type:'network', network:'instagram'})}} title="Instagram"><div className="platform-dot instagram" style={{position:'relative', left:0, bottom:0, width:14, height:14, background:'linear-gradient(45deg,#f09433,#bc1888)'}}/></button>
+          <button className={`nav-item ${(filter.network==='signal')?'active':''}`} onClick={()=>{setView('inbox'); setFilter({type:'network', network:'signal'})}} title="Signal"><div className="platform-dot signal" style={{position:'relative', left:0, bottom:0, width:14, height:14, background:'#3a76f0'}}/></button>
+
           <div style={{marginTop:'auto'}}>
-             <button className="nav-item" onClick={()=>setShowAddModal(true)} title="Ajouter un compte"><Plus size={22}/></button>
-             <button className="nav-item" onClick={()=>{clearToken();setUser(null)}} title="Sortir"><LogOut size={20}/></button>
+             <button className={`nav-item ${view==='contacts'?'active':''}`} onClick={()=>setView('contacts')} title="Contacts"><Users size={22}/></button>
+             <button className={`nav-item ${view==='settings'?'active':''}`} onClick={()=>setView('settings')} title="Comptes"><Settings size={22}/></button>
+             <button className="nav-item" onClick={()=>setShowAddModal(true)} title="Ajouter"><Plus size={22}/></button>
+             <button className="nav-item" onClick={()=>{clearToken();setUser(null)}} title="Quitter"><LogOut size={20}/></button>
           </div>
         </nav>
       )}
@@ -594,11 +611,29 @@ export default function App() {
       {/* LIST PANE */}
       <div className={`list-pane ${selectedConv && isMobile ? 'hidden' : ''}`}>
         <header className="pane-header">
-           <h1>{view==='archive'?'Archives':view==='contacts'?'Contacts':view==='settings'?'Paramètres':'Messages'} <span className="badge">
-             {view==='contacts' ? contacts.length : view==='settings' ? accounts.length : sortedConvs.length}
+           <h1>{
+             filter.type === 'network' ? (filter.network === 'whatsapp' ? 'WhatsApp' : filter.network === 'telegram' ? 'Telegram' : filter.network === 'instagram' ? 'Instagram' : 'Signal') 
+             : filter.type === 'account' ? (accounts.find(a=>a.id===filter.accountId)?.account_name || 'Compte')
+             : view === 'archive' ? 'Archives' 
+             : view === 'contacts' ? 'Contacts' 
+             : view === 'settings' ? 'Paramètres' 
+             : 'Messages'
+           } <span className="badge">
+             {view === 'contacts' ? contacts.length : view === 'settings' ? accounts.length : sortedConvs.length}
            </span></h1>
            <div className="search-box"><Search size={16} color="var(--text-dim)"/><input placeholder="Rechercher..." value={searchQuery} onChange={e=>setSearchQuery(e.target.value)}/></div>
         </header>
+
+        {(filter.type === 'network' || filter.type === 'account') && (
+          <div className="account-selector">
+            <button className={`acc-tab ${filter.type==='network'?'active':''}`} onClick={()=>setFilter({type:'network', network: filter.network})}>Tout {filter.network}</button>
+            {accounts.filter(a => a.platform === filter.network).map(acc => (
+              <button key={acc.id} className={`acc-tab ${filter.accountId===acc.id?'active':''}`} onClick={()=>setFilter({type:'account', network: acc.platform, accountId: acc.id})}>
+                {acc.account_name || acc.username || (acc.platform === 'whatsapp' ? 'Numéro WA' : 'Compte')}
+              </button>
+            ))}
+          </div>
+        )}
 
         <div className="scroll-area">
            {view === 'contacts' ? (

@@ -45,7 +45,7 @@ const apiAvailable = async () => {
 export const startSignalLink = async (accountId) => {
   if (!await apiAvailable()) {
     throw new Error(
-      'signal-cli-rest-api non disponible. Vérifiez SIGNAL_API_URL dans Railway.'
+      `signal-cli-rest-api non disponible à ${SIGNAL_API}. Vérifiez SIGNAL_API_URL dans Railway.`
     );
   }
 

@@ -435,3 +435,28 @@ button {
 @media (max-width: 768px) {
   .scroll-area { padding-bottom: 80px !important; }
 }
+/* Account Selector Tabs (V48) */
+.account-selector {
+  display: flex;
+  gap: 8px;
+  padding: 0 24px 16px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.account-selector::-webkit-scrollbar { display: none; }
+
+.acc-tab {
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  background: var(--surface-200);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-muted);
+}
+.acc-tab.active {
+  background: rgba(210, 178, 120, 0.1);
+  color: var(--accent-gold);
+  border-color: var(--accent-gold);
+}
