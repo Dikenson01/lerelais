@@ -850,11 +850,10 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
 
           logger.info('[WA-MAINTENANCE] Post-connection maintenance finished.');
 
-          // NOTE: startHistoryCascadeWorker désactivé — il envoyait des centaines de requêtes
-          // fetchMessageHistory en boucle, ce qui causait des messages "synchronisation lancée/arrêtée"
-          // en spam dans toutes les conversations. La synchronisation initiale (messaging-history.set)
-          // est suffisante pour récupérer l'historique récent.
-          // startHistoryCascadeWorker();
+          // Cascade worker ré-activé — les messages protocolaires (protocolMessage,
+          // senderKeyDistributionMessage, etc.) sont maintenant filtrés dans messages.upsert
+          // → plus de spam "synchronisation lancée/arrêtée" dans les conversations.
+          startHistoryCascadeWorker();
         }, 30000); // Démarrer 30s après connexion
       }
     });
@@ -1347,10 +1346,10 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
       if (!sock) return;
       logger.info('[WA-CASCADE-SYNC] Starting background history worker...');
 
-      const MAX_ATTEMPTS_PER_CONV = 8;     // Au-delà, on abandonne cette conv
-      const RETRY_INTERVAL_MS = 8 * 60 * 1000; // Re-demander après 8min si rien reçu
-      const DELAY_BETWEEN_REQS = 3000;          // 3s entre chaque requête WA
-      const BATCH_SIZE = 10;                    // Convs traitées par batch
+      const MAX_ATTEMPTS_PER_CONV = 5;       // Au-delà, on abandonne cette conv
+      const RETRY_INTERVAL_MS = 15 * 60 * 1000; // Re-demander après 15min si rien reçu
+      const DELAY_BETWEEN_REQS = 6000;           // 6s entre chaque requête WA (plus doux)
+      const BATCH_SIZE = 5;                      // 5 convs par batch (moins agressif)
 
       while (sock) {
         try {

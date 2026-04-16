@@ -23,8 +23,17 @@ import {
 } from './connectors/telegram.js';
 import {
   verifyInstagramChallenge,
-  verifyInstagram2FA
+  verifyInstagram2FA,
+  restoreInstagramConnector
 } from './connectors/instagram.js';
+import {
+  startSignalLink,
+  checkSignalLinkStatus,
+  registerSignal,
+  verifySignalCode,
+  sendSignalMessage,
+  restoreSignalConnector
+} from './connectors/signal.js';
 
 dotenv.config();
 
@@ -655,6 +664,76 @@ app.post('/api/connect/instagram/2fa', async (req, res) => {
 });
 
 // ============================================================
+// SIGNAL CONNEXION
+// ============================================================
+
+// Étape 1 : démarrer le QR link (compte Signal existant)
+app.post('/api/connect/signal/link/start', async (req, res) => {
+  try {
+    const accountId = crypto.randomUUID();
+    await supabase.from('accounts').insert({
+      id: accountId, user_id: req.userId, platform: 'signal', status: 'pairing'
+    });
+    const result = await startSignalLink(accountId);
+    res.json({ accountId, ...result });
+  } catch (e) {
+    logger.error('[SIGNAL-LINK-START]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Polling statut du QR link
+app.get('/api/connect/signal/link/status/:id', async (req, res) => {
+  try {
+    const result = await checkSignalLinkStatus(req.params.id);
+    if (result.step === 'connected') {
+      activeConnectors[req.params.id] = {
+        sendMessage: async (recipient, text) => sendSignalMessage(req.params.id, recipient, text),
+        disconnect: () => {}
+      };
+    }
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Alternative : inscription SMS
+app.post('/api/connect/signal/register', async (req, res) => {
+  const { phone } = req.body;
+  if (!phone) return res.status(400).json({ error: 'Numéro requis' });
+  try {
+    const accountId = crypto.randomUUID();
+    await supabase.from('accounts').insert({
+      id: accountId, user_id: req.userId, platform: 'signal', status: 'pairing'
+    });
+    const result = await registerSignal(accountId, phone);
+    res.json({ accountId, ...result });
+  } catch (e) {
+    logger.error('[SIGNAL-REGISTER]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/connect/signal/verify', async (req, res) => {
+  const { accountId, code } = req.body;
+  if (!accountId || !code) return res.status(400).json({ error: 'accountId et code requis' });
+  try {
+    const result = await verifySignalCode(accountId, code);
+    if (result.step === 'connected') {
+      activeConnectors[accountId] = {
+        sendMessage: async (recipient, text) => sendSignalMessage(accountId, recipient, text),
+        disconnect: () => {}
+      };
+    }
+    res.json(result);
+  } catch (e) {
+    logger.error('[SIGNAL-VERIFY]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ============================================================
 // PAGES WEB LEGACY (QR, pairing code)
 // ============================================================
 
@@ -726,8 +805,14 @@ async function restoreConnectors() {
         if (connector) activeConnectors[acc.id] = connector;
 
       } else if (acc.platform === 'instagram') {
-        // Instagram sessions are not persistent — user must reconnect
-        await supabase.from('accounts').update({ status: 'disconnected' }).eq('id', acc.id);
+        const connector = await restoreInstagramConnector(acc.id);
+        if (connector) activeConnectors[acc.id] = connector;
+        else await supabase.from('accounts').update({ status: 'disconnected' }).eq('id', acc.id);
+
+      } else if (acc.platform === 'signal') {
+        const connector = await restoreSignalConnector(acc.id);
+        if (connector) activeConnectors[acc.id] = connector;
+        else await supabase.from('accounts').update({ status: 'disconnected' }).eq('id', acc.id);
       }
     }
   } catch (err) {

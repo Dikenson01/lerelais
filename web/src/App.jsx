@@ -100,12 +100,24 @@ export default function App() {
   const [tgStep, setTgStep] = useState(null); // null | 'phone' | 'code' | '2fa' | 'connected'
   const [tgAccountId, setTgAccountId] = useState(null);
   const [tgError, setTgError] = useState('');
+  // Telegram QR state
+  const [tgQR, setTgQR] = useState(null);
   // Instagram pairing state
   const [igUsername, setIgUsername] = useState('');
   const [igPassword, setIgPassword] = useState('');
-  const [igStep, setIgStep] = useState(null); // null | 'login' | 'connecting' | 'connected'
+  const [igStep, setIgStep] = useState(null); // null | 'login' | 'connecting' | 'challenge' | '2fa' | 'connected'
   const [igError, setIgError] = useState('');
-  const [activeNetwork, setActiveNetwork] = useState(null); // 'whatsapp' | 'telegram' | 'instagram'
+  const [igAccountId, setIgAccountId] = useState(null);
+  const [igChallengeCode, setIgChallengeCode] = useState('');
+  const [ig2FACode, setIg2FACode] = useState('');
+  // Signal pairing state
+  const [signalStep, setSignalStep] = useState(null); // null | 'menu' | 'qr' | 'sms_phone' | 'sms_code' | 'connecting' | 'connected'
+  const [signalAccountId, setSignalAccountId] = useState(null);
+  const [signalQR, setSignalQR] = useState(null);
+  const [signalPhone, setSignalPhone] = useState('');
+  const [signalCode, setSignalCode] = useState('');
+  const [signalError, setSignalError] = useState('');
+  const [activeNetwork, setActiveNetwork] = useState(null); // 'whatsapp' | 'telegram' | 'instagram' | 'signal'
 
   const messagesEndRef = useRef(null);
   const messagesAreaRef = useRef(null);
@@ -256,6 +268,34 @@ export default function App() {
     }
   };
 
+  // ── Telegram QR flow ─────────────────────────────────────
+  const startTelegramQRFlow = async () => {
+    setTgError('');
+    setTgStep('connecting');
+    try {
+      const r = await axios.post(`${API}/connect/telegram/qr/start`);
+      setTgAccountId(r.data.accountId);
+      setTgQR(r.data.qr);
+      setTgStep('qr');
+      // Poll for status
+      const pollId = setInterval(async () => {
+        try {
+          const s = await axios.get(`${API}/connect/telegram/qr/status/${r.data.accountId}`);
+          if (s.data.qr) setTgQR(s.data.qr);
+          if (s.data.status === 'connected') {
+            clearInterval(pollId);
+            setTgStep('connected');
+            preloadData();
+            setTimeout(() => { setShowAddModal(false); resetPairingState(); }, 2500);
+          }
+        } catch (e) {}
+      }, 2000);
+    } catch (err) {
+      setTgError(err.response?.data?.error || 'Erreur QR');
+      setTgStep('phone');
+    }
+  };
+
   // ── Instagram auth ────────────────────────────────────────
   const connectInstagram = async (e) => {
     e?.preventDefault();
@@ -263,7 +303,10 @@ export default function App() {
     if (!igUsername.trim() || !igPassword.trim()) return;
     try {
       setIgStep('connecting');
-      await axios.post(`${API}/connect/instagram`, { username: igUsername, password: igPassword });
+      const r = await axios.post(`${API}/connect/instagram`, { username: igUsername, password: igPassword });
+      setIgAccountId(r.data.accountId);
+      if (r.data.status === 'challenge') { setIgStep('challenge'); return; }
+      if (r.data.status === '2fa') { setIgStep('2fa'); return; }
       setIgStep('connected');
       preloadData();
       setTimeout(() => { setShowAddModal(false); resetPairingState(); }, 2500);
@@ -273,10 +316,97 @@ export default function App() {
     }
   };
 
+  const verifyIgChallenge = async (e) => {
+    e?.preventDefault();
+    setIgError('');
+    try {
+      setIgStep('connecting');
+      await axios.post(`${API}/connect/instagram/challenge`, { accountId: igAccountId, code: igChallengeCode });
+      setIgStep('connected');
+      preloadData();
+      setTimeout(() => { setShowAddModal(false); resetPairingState(); }, 2500);
+    } catch (err) {
+      setIgError(err.response?.data?.error || 'Code incorrect');
+      setIgStep('challenge');
+    }
+  };
+
+  const verifyIg2FA = async (e) => {
+    e?.preventDefault();
+    setIgError('');
+    try {
+      setIgStep('connecting');
+      await axios.post(`${API}/connect/instagram/2fa`, { accountId: igAccountId, code: ig2FACode });
+      setIgStep('connected');
+      preloadData();
+      setTimeout(() => { setShowAddModal(false); resetPairingState(); }, 2500);
+    } catch (err) {
+      setIgError(err.response?.data?.error || 'Code 2FA incorrect');
+      setIgStep('2fa');
+    }
+  };
+
+  // ── Signal auth ───────────────────────────────────────────
+  const startSignalLinkFlow = async () => {
+    setSignalError('');
+    setSignalStep('connecting');
+    try {
+      const r = await axios.post(`${API}/connect/signal/link/start`);
+      setSignalAccountId(r.data.accountId);
+      setSignalQR(r.data.qr);
+      setSignalStep('qr');
+      // Poll for link completion
+      const pollId = setInterval(async () => {
+        try {
+          const s = await axios.get(`${API}/connect/signal/link/status/${r.data.accountId}`);
+          if (s.data.step === 'connected') {
+            clearInterval(pollId);
+            setSignalStep('connected');
+            preloadData();
+            setTimeout(() => { setShowAddModal(false); resetPairingState(); }, 2500);
+          }
+        } catch (e) {}
+      }, 3000);
+    } catch (err) {
+      setSignalError(err.response?.data?.error || 'signal-cli non disponible');
+      setSignalStep('menu');
+    }
+  };
+
+  const startSignalSMS = async (e) => {
+    e?.preventDefault();
+    setSignalError('');
+    try {
+      setSignalStep('connecting');
+      const r = await axios.post(`${API}/connect/signal/register`, { phone: signalPhone });
+      setSignalAccountId(r.data.accountId);
+      setSignalStep('sms_code');
+    } catch (err) {
+      setSignalError(err.response?.data?.error || 'Erreur Signal');
+      setSignalStep('sms_phone');
+    }
+  };
+
+  const verifySignalSMSCode = async (e) => {
+    e?.preventDefault();
+    setSignalError('');
+    try {
+      setSignalStep('connecting');
+      await axios.post(`${API}/connect/signal/verify`, { accountId: signalAccountId, code: signalCode });
+      setSignalStep('connected');
+      preloadData();
+      setTimeout(() => { setShowAddModal(false); resetPairingState(); }, 2500);
+    } catch (err) {
+      setSignalError(err.response?.data?.error || 'Code incorrect');
+      setSignalStep('sms_code');
+    }
+  };
+
   const resetPairingState = () => {
     setPairingStatus(null); setPairingQR(null); setPairingId(null);
-    setTgPhone(''); setTgCode(''); setTg2FA(''); setTgStep(null); setTgAccountId(null); setTgError('');
-    setIgUsername(''); setIgPassword(''); setIgStep(null); setIgError('');
+    setTgPhone(''); setTgCode(''); setTg2FA(''); setTgStep(null); setTgAccountId(null); setTgError(''); setTgQR(null);
+    setIgUsername(''); setIgPassword(''); setIgStep(null); setIgError(''); setIgAccountId(null); setIgChallengeCode(''); setIg2FACode('');
+    setSignalStep(null); setSignalAccountId(null); setSignalQR(null); setSignalPhone(''); setSignalCode(''); setSignalError('');
     setActiveNetwork(null);
   };
 
@@ -834,11 +964,116 @@ export default function App() {
                 <p style={{marginTop:16, color:'var(--text-dim)'}}>Connexion à Instagram...</p>
               </div>
 
+            /* ── Instagram challenge (code email/SMS) ── */
+            ) : activeNetwork === 'instagram' && igStep === 'challenge' ? (
+              <div>
+                <button onClick={resetPairingState} style={{float:'right', color:'var(--text-dim)', padding:4}}><X size={18}/></button>
+                <h2 style={{marginBottom:6}}>Vérification Instagram</h2>
+                <p style={{color:'var(--text-dim)', fontSize:13, marginBottom:4}}>Instagram a envoyé un code de sécurité à votre adresse e-mail ou téléphone.</p>
+                <p style={{color:'#f09433', fontSize:11, marginBottom:16}}>Vérifiez votre e-mail ou SMS lié à votre compte Instagram.</p>
+                <form onSubmit={verifyIgChallenge}>
+                  <input className="lx-input" placeholder="Code de vérification (6 chiffres)" value={igChallengeCode} onChange={e=>setIgChallengeCode(e.target.value)} maxLength={8} required/>
+                  {igError && <p style={{color:'var(--accent-red)', fontSize:12, marginBottom:8}}>{igError}</p>}
+                  <button type="submit" className="lx-btn" style={{background:'linear-gradient(45deg,#f09433,#dc2743,#bc1888)', color:'white'}}>Valider le code</button>
+                </form>
+              </div>
+
+            /* ── Instagram 2FA ── */
+            ) : activeNetwork === 'instagram' && igStep === '2fa' ? (
+              <div>
+                <button onClick={resetPairingState} style={{float:'right', color:'var(--text-dim)', padding:4}}><X size={18}/></button>
+                <h2 style={{marginBottom:6}}>Double authentification</h2>
+                <p style={{color:'var(--text-dim)', fontSize:13, marginBottom:16}}>Entrez le code de votre application d'authentification.</p>
+                <form onSubmit={verifyIg2FA}>
+                  <input className="lx-input" placeholder="Code 2FA (6 chiffres)" value={ig2FACode} onChange={e=>setIg2FACode(e.target.value)} maxLength={8} required/>
+                  {igError && <p style={{color:'var(--accent-red)', fontSize:12, marginBottom:8}}>{igError}</p>}
+                  <button type="submit" className="lx-btn" style={{background:'linear-gradient(45deg,#f09433,#dc2743,#bc1888)', color:'white'}}>Confirmer</button>
+                </form>
+              </div>
+
             ) : activeNetwork === 'instagram' && igStep === 'connected' ? (
               <div style={{textAlign:'center', padding:'20px 0'}}>
                 <p style={{fontSize:40}}>✅</p>
                 <h2 style={{marginTop:12}}>Instagram connecté !</h2>
                 <p style={{color:'var(--text-dim)', marginTop:8}}>Vos DMs Instagram apparaîtront dans le Hub.</p>
+              </div>
+
+            /* ── Signal : menu choix ── */
+            ) : activeNetwork === 'signal' && (signalStep === 'menu' || !signalStep) ? (
+              <div>
+                <button onClick={resetPairingState} style={{float:'right', color:'var(--text-dim)', padding:4}}><X size={18}/></button>
+                <h2 style={{marginBottom:6}}>Connecter Signal</h2>
+                <p style={{color:'var(--text-dim)', fontSize:13, marginBottom:20}}>Choisissez votre méthode de connexion</p>
+                {signalError && <p style={{color:'var(--accent-red)', fontSize:12, marginBottom:12}}>{signalError}</p>}
+                <div className="conv-card" style={{background:'var(--surface-200)', marginBottom:10, cursor:'pointer'}} onClick={startSignalLinkFlow}>
+                  <div style={{fontSize:28, marginRight:12}}>📱</div>
+                  <div className="conv-content">
+                    <strong>Lier mon compte Signal</strong>
+                    <small style={{color:'var(--text-dim)'}}>Scannez un QR depuis votre appli Signal (recommandé)</small>
+                  </div>
+                </div>
+                <div className="conv-card" style={{background:'var(--surface-200)', cursor:'pointer'}} onClick={()=>setSignalStep('sms_phone')}>
+                  <div style={{fontSize:28, marginRight:12}}>✉️</div>
+                  <div className="conv-content">
+                    <strong>Nouveau numéro Signal</strong>
+                    <small style={{color:'var(--text-dim)'}}>Inscrire un numéro dédié via SMS</small>
+                  </div>
+                </div>
+                <p style={{color:'var(--text-dim)', fontSize:11, marginTop:16, lineHeight:'1.5'}}>
+                  ⚙️ Requiert le service <strong>signal-cli-rest-api</strong> déployé sur Railway.<br/>
+                  Configurez <code>SIGNAL_API_URL</code> dans vos variables Railway.
+                </p>
+              </div>
+
+            /* ── Signal : QR link ── */
+            ) : activeNetwork === 'signal' && signalStep === 'qr' ? (
+              <div style={{textAlign:'center'}}>
+                <button onClick={resetPairingState} style={{position:'absolute', top:16, right:16, color:'var(--text-dim)', padding:8}}><X size={18}/></button>
+                <h2 style={{marginBottom:6}}>Scanner le QR Signal</h2>
+                <p style={{color:'var(--text-dim)', fontSize:13, marginBottom:16}}>Signal → Paramètres → Appareils liés → Lier un appareil</p>
+                <div style={{background:'white', padding:16, borderRadius:16, display:'inline-block'}}>
+                  {signalQR ? <img src={signalQR} alt="Signal QR" style={{width:200, height:200}}/> : <Loader2 className="spinner" size={40}/>}
+                </div>
+                <p style={{marginTop:12, color:'var(--text-dim)', fontSize:12}}>En attente du scan…</p>
+              </div>
+
+            /* ── Signal : SMS phone ── */
+            ) : activeNetwork === 'signal' && signalStep === 'sms_phone' ? (
+              <div>
+                <button onClick={() => setSignalStep('menu')} style={{float:'right', color:'var(--text-dim)', padding:4}}><X size={18}/></button>
+                <h2 style={{marginBottom:6}}>Numéro Signal</h2>
+                <p style={{color:'var(--text-dim)', fontSize:13, marginBottom:16}}>Entrez le numéro à inscrire sur Signal (numéro dédié)</p>
+                <form onSubmit={startSignalSMS}>
+                  <input className="lx-input" placeholder="+33 6 12 34 56 78" value={signalPhone} onChange={e=>setSignalPhone(e.target.value)} required/>
+                  {signalError && <p style={{color:'var(--accent-red)', fontSize:12, marginBottom:8}}>{signalError}</p>}
+                  <button type="submit" className="lx-btn" style={{background:'#3A76F0', color:'white'}}>Envoyer le SMS</button>
+                </form>
+              </div>
+
+            /* ── Signal : SMS code ── */
+            ) : activeNetwork === 'signal' && signalStep === 'sms_code' ? (
+              <div>
+                <button onClick={() => setSignalStep('sms_phone')} style={{float:'right', color:'var(--text-dim)', padding:4}}><X size={18}/></button>
+                <h2 style={{marginBottom:6}}>Code de vérification Signal</h2>
+                <p style={{color:'var(--text-dim)', fontSize:13, marginBottom:16}}>Code reçu par SMS au {signalPhone}</p>
+                <form onSubmit={verifySignalSMSCode}>
+                  <input className="lx-input" placeholder="000-000" value={signalCode} onChange={e=>setSignalCode(e.target.value)} required/>
+                  {signalError && <p style={{color:'var(--accent-red)', fontSize:12, marginBottom:8}}>{signalError}</p>}
+                  <button type="submit" className="lx-btn" style={{background:'#3A76F0', color:'white'}}>Confirmer</button>
+                </form>
+              </div>
+
+            ) : activeNetwork === 'signal' && signalStep === 'connecting' ? (
+              <div style={{textAlign:'center', padding:'30px 0'}}>
+                <Loader2 className="spinner" size={36} style={{color:'#3A76F0'}}/>
+                <p style={{marginTop:16, color:'var(--text-dim)'}}>Connexion à Signal...</p>
+              </div>
+
+            ) : activeNetwork === 'signal' && signalStep === 'connected' ? (
+              <div style={{textAlign:'center', padding:'20px 0'}}>
+                <p style={{fontSize:40}}>✅</p>
+                <h2 style={{marginTop:12}}>Signal connecté !</h2>
+                <p style={{color:'var(--text-dim)', marginTop:8}}>Vos messages Signal apparaîtront dans le Hub.</p>
               </div>
 
             /* ── Liste des réseaux ── */
@@ -871,25 +1106,25 @@ export default function App() {
                   <div className="conv-content"><strong>Instagram</strong><small style={{color:'var(--accent-green)', fontSize:11}}>✓ Disponible · identifiants</small></div>
                 </div>
 
-                {/* Signal — nécessite configuration serveur */}
-                <div className="conv-card" style={{background:'var(--surface-100)', border:'1px dashed var(--border-muted)', marginBottom:10, opacity:0.5, cursor:'not-allowed'}}>
+                {/* Signal */}
+                <div className="conv-card" style={{background:'var(--surface-200)', border:'1px solid var(--border-muted)', marginBottom:10, cursor:'pointer'}} onClick={()=>{setActiveNetwork('signal'); setSignalStep('menu');}}>
                   <div style={{width:36,height:36,borderRadius:'50%',background:'#3A76F0',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="white"><path d="M12 0C5.374 0 0 5.373 0 12c0 2.023.52 3.925 1.433 5.582L.054 23.88l6.405-1.673A11.945 11.945 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm.174 18.784c-1.032 0-2.03-.18-2.96-.51l-3.04.836.85-2.97a6.781 6.781 0 01-1.178-3.838c0-3.774 3.084-6.836 6.886-6.836 3.8 0 6.884 3.062 6.884 6.836 0 3.773-3.084 6.836-6.886 6.836l.444-.354z"/></svg>
                   </div>
                   <div className="conv-content">
                     <strong>Signal</strong>
-                    <small style={{color:'var(--text-dim)', fontSize:11}}>Requiert signal-cli · configuration serveur</small>
+                    <small style={{color:'var(--accent-green)', fontSize:11}}>✓ Disponible · nécessite signal-cli sur Railway</small>
                   </div>
                 </div>
 
-                {/* Snapchat — pas d'API publique */}
-                <div className="conv-card" style={{background:'var(--surface-100)', border:'1px dashed var(--border-muted)', opacity:0.5, cursor:'not-allowed'}}>
+                {/* Snapchat */}
+                <div className="conv-card" style={{background:'var(--surface-100)', border:'1px dashed var(--border-muted)', opacity:0.45, cursor:'not-allowed'}}>
                   <div style={{width:36,height:36,borderRadius:'50%',background:'#FFFC00',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="#000"><path d="M12.017 0C8.3 0 7.86.015 7.86.015 4.93.15 2.875 1.01 1.715 2.17.557 3.326-.002 4.866 0 8.006c0 .44.013 1.94.013 3.994C.013 16.11.013 16.543 0 16.994c.002 3.14.559 4.68 1.715 5.836C2.874 23.986 4.93 24.848 7.86 24.984c0 0 .44.016 4.157.016 3.716 0 4.14-.016 4.14-.016 2.928-.136 4.985-.998 6.143-2.154C23.454 21.672 24 20.13 24 16.994c0-.45-.013-1.94-.013-3.994C23.987 8 23.987 7.57 24 7.006 24 3.866 23.443 2.326 22.285 1.17 21.127.016 19.072-.847 16.142-.984 16.142-.984 15.72-1 12.017 0zm-.001 2.16c3.648 0 4.08.014 4.08.014 2.475.113 3.813.805 4.577 1.57.766.764 1.46 2.1 1.573 4.576.013.45.013 1.925.013 3.964v.003c0 2.04 0 3.516-.013 3.965-.113 2.476-.807 3.81-1.573 4.576-.764.764-2.102 1.457-4.577 1.57-.4.014-4.08.014-4.08.014s-3.698 0-4.095-.013c-2.476-.112-3.814-.806-4.578-1.57C3.36 20.094 2.667 18.76 2.554 16.283c-.013-.45-.013-1.925-.013-3.965v-.003c0-2.04 0-3.515.013-3.964.113-2.476.807-3.812 1.57-4.576.766-.766 2.103-1.458 4.579-1.571.395-.013 4.08-.013 4.08-.013s.234-.03.233-.03z"/></svg>
                   </div>
                   <div className="conv-content">
                     <strong>Snapchat</strong>
-                    <small style={{color:'var(--text-dim)', fontSize:11}}>Pas d'API disponible publiquement</small>
+                    <small style={{color:'var(--text-dim)', fontSize:11}}>Pas d'API officielle — non supporté</small>
                   </div>
                 </div>
               </div>

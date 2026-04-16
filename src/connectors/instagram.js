@@ -1,35 +1,72 @@
+/**
+ * INSTAGRAM DM CONNECTOR
+ * Using instagram-private-api (unofficial API)
+ *
+ * FLOW:
+ * 1. connectToInstagram(username, password) → 'connected' | throws { type: 'challenge' } | { type: '2fa' }
+ * 2. verifyInstagramChallenge(accountId, code) → 'connected'
+ * 3. verifyInstagram2FA(accountId, code) → 'connected'
+ *
+ * Anti-ban:
+ * - preLoginFlow / postLoginFlow to mimic a real app session
+ * - Random delays between operations
+ * - State serialization/deserialization for session reuse
+ */
+
 import { IgApiClient, IgCheckpointError, IgLoginTwoFactorRequiredError } from 'instagram-private-api';
 import logger from '../utils/logger.js';
 import supabase from '../config/supabase.js';
 
-// In-memory: accountId → { ig, challengeState }
+// In-memory: accountId → { ig, challengeState, twoFactorIdentifier, twoFactorUsername }
 const igSessions = new Map();
 
-/**
- * Step 1: Attempt login — may return 'connected', 'challenge_email', 'challenge_phone', or '2fa'
- */
+const delay = (ms) => new Promise(r => setTimeout(r, ms));
+const jitter = (base, max = 2000) => delay(base + Math.random() * max);
+
+// ─────────────────────────────────────────────
+//  STEP 1: Login
+// ─────────────────────────────────────────────
+
 export async function connectToInstagram(accountId, username, password, onMessage, onEvents) {
   const ig = new IgApiClient();
   ig.state.generateDevice(username);
 
+  // Restore saved state if available (avoids triggering IG security on repeated logins)
+  const { data: acc } = await supabase.from('accounts')
+    .select('metadata').eq('id', accountId).maybeSingle();
+  if (acc?.metadata?.ig_state) {
+    try {
+      await ig.state.deserialize(acc.metadata.ig_state);
+      logger.info(`[IG] Restored saved session for ${username}`);
+    } catch (e) {
+      logger.warn('[IG] Could not restore session state:', e.message);
+    }
+  }
+
   try {
     logger.info(`[IG] Authenticating ${username}...`);
 
-    // Simulate mobile app request headers
+    // Simulate real mobile app behaviour (reduces challenge rate)
     await ig.simulate.preLoginFlow();
-    await new Promise(r => setTimeout(r, 3000)); // Safer wait
+    await jitter(1000, 1500);
+
     const auth = await ig.account.login(username, password);
-    await new Promise(r => setTimeout(r, 1000));
+
+    await jitter(500, 1000);
     await ig.simulate.postLoginFlow();
 
-    logger.info(`[IG] Connected as ${username}`);
-    igSessions.set(accountId, { ig });
-
+    // Persist serialized session state to Supabase
+    const igState = await ig.state.serialize();
+    delete igState.constants; // strip constants to reduce size
     await supabase.from('accounts').update({
       status: 'connected',
       account_name: auth.full_name || username,
-      username
+      username,
+      metadata: { ...(acc?.metadata || {}), ig_state: igState }
     }).eq('id', accountId);
+
+    logger.info(`[IG] Connected as ${auth.full_name || username}`);
+    igSessions.set(accountId, { ig });
 
     if (onEvents?.onConnected) onEvents.onConnected();
     _startPolling(accountId, ig, onMessage);
@@ -44,58 +81,70 @@ export async function connectToInstagram(accountId, username, password, onMessag
     };
 
   } catch (err) {
-    // --- CHALLENGE (Instagram asks for email/SMS verification) ---
+    // ── CHALLENGE (Instagram demande vérification email/SMS) ──
     if (err instanceof IgCheckpointError) {
       logger.info(`[IG] Challenge required for ${username}`);
-      await ig.challenge.auto(true); // send code via email/SMS automatically
+      try {
+        await ig.challenge.auto(true); // force code via email/SMS
+      } catch (e) {
+        logger.warn('[IG] challenge.auto failed:', e.message);
+      }
       igSessions.set(accountId, { ig, username, password });
-
       await supabase.from('accounts').update({ status: 'challenge' }).eq('id', accountId);
       throw Object.assign(new Error('challenge_required'), { type: 'challenge' });
     }
 
-    // --- TWO FACTOR AUTH ---
+    // ── 2FA ──
     if (err instanceof IgLoginTwoFactorRequiredError) {
-      const { username: twoFactorUsername, totp_two_factor_on, two_factor_identifier } = err.response.body.two_factor_info;
-      igSessions.set(accountId, { ig, twoFactorIdentifier: two_factor_identifier, twoFactorUsername });
+      const info = err.response.body.two_factor_info;
+      igSessions.set(accountId, {
+        ig,
+        twoFactorIdentifier: info.two_factor_identifier,
+        twoFactorUsername: info.username
+      });
       throw Object.assign(new Error('2fa_required'), { type: '2fa' });
     }
 
     logger.error('[IG] Login failed:', err.message);
-    if (err.response) {
-      logger.error('[IG-DEBUG] Status:', err.response.statusCode);
-      logger.error('[IG-DEBUG] Body:', JSON.stringify(err.response.body, null, 2));
-    }
     throw err;
   }
 }
 
-/**
- * Step 2a: Verify Instagram challenge code (email/SMS)
- */
+// ─────────────────────────────────────────────
+//  STEP 2a: Verify challenge code (email/SMS)
+// ─────────────────────────────────────────────
+
 export async function verifyInstagramChallenge(accountId, code) {
   const session = igSessions.get(accountId);
-  if (!session?.ig) throw new Error('Session introuvable, recommencez');
+  if (!session?.ig) throw new Error('Session introuvable, recommencez la connexion');
 
   try {
-    await session.ig.challenge.sendSecurityCode(code);
+    await session.ig.challenge.sendSecurityCode(code.trim());
     logger.info(`[IG] Challenge verified for account ${accountId}`);
 
-    // Re-login after challenge
     const auth = await session.ig.account.currentUser();
-    await supabase.from('accounts').update({ status: 'connected' }).eq('id', accountId);
+
+    // Persist session state after challenge
+    const igState = await session.ig.state.serialize();
+    delete igState.constants;
+    await supabase.from('accounts').update({
+      status: 'connected',
+      account_name: auth.full_name || auth.username,
+      metadata: { ig_state: igState }
+    }).eq('id', accountId);
 
     _startPolling(accountId, session.ig, null);
     return { status: 'connected', displayName: auth.full_name || auth.username };
   } catch (err) {
     logger.error('[IG] Challenge verification failed:', err.message);
-    throw err;
+    throw new Error('Code incorrect ou expiré. Réessayez.');
   }
 }
 
-/**
- * Step 2b: Verify 2FA code
- */
+// ─────────────────────────────────────────────
+//  STEP 2b: Verify 2FA code
+// ─────────────────────────────────────────────
+
 export async function verifyInstagram2FA(accountId, code) {
   const session = igSessions.get(accountId);
   if (!session?.ig) throw new Error('Session introuvable');
@@ -103,24 +152,31 @@ export async function verifyInstagram2FA(accountId, code) {
   try {
     await session.ig.account.twoFactorLogin({
       username: session.twoFactorUsername,
-      verificationCode: code,
+      verificationCode: code.trim(),
       twoFactorIdentifier: session.twoFactorIdentifier,
       verificationMethod: '1', // SMS
       trustThisDevice: '1'
     });
 
-    await supabase.from('accounts').update({ status: 'connected' }).eq('id', accountId);
+    const igState = await session.ig.state.serialize();
+    delete igState.constants;
+    await supabase.from('accounts').update({
+      status: 'connected',
+      metadata: { ig_state: igState }
+    }).eq('id', accountId);
+
     _startPolling(accountId, session.ig, null);
     return { status: 'connected' };
   } catch (err) {
     logger.error('[IG] 2FA failed:', err.message);
-    throw err;
+    throw new Error('Code 2FA incorrect.');
   }
 }
 
-/**
- * Poll Instagram DMs every 20s
- */
+// ─────────────────────────────────────────────
+//  POLLING DES DMs (toutes les 20s)
+// ─────────────────────────────────────────────
+
 function _startPolling(accountId, ig, onMessage) {
   const poll = async () => {
     try {
@@ -133,7 +189,10 @@ function _startPolling(accountId, ig, onMessage) {
 
         const isFromMe = lastMsg.user_id?.toString() === ig.state.cookieUserId?.toString();
         const sender = isFromMe ? null : thread.users?.[0];
-        const content = lastMsg.text || (lastMsg.media_share ? '📷 Post partagé' : lastMsg.link ? '🔗 Lien' : '[Média]');
+        const content = lastMsg.text
+          || (lastMsg.media_share ? '📷 Post partagé' : null)
+          || (lastMsg.link ? '🔗 Lien' : null)
+          || '[Média]';
 
         // Upsert contact
         let contactId = null;
@@ -141,7 +200,7 @@ function _startPolling(accountId, ig, onMessage) {
           const { data: contact } = await supabase.from('contacts').upsert({
             account_id: accountId,
             external_id: `ig_${sender.pk}`,
-            display_name: sender.full_name || sender.username,
+            display_name: sender.full_name || sender.username || `@${sender.username}`,
             avatar_url: sender.profile_pic_url || null,
             platform: 'instagram',
             metadata: { ig_username: sender.username }
@@ -185,8 +244,49 @@ function _startPolling(accountId, ig, onMessage) {
   };
 
   const interval = setInterval(poll, 20000);
-  poll(); // run immediately on connect
+  poll(); // run immediately
 
   const existing = igSessions.get(accountId);
   if (existing) igSessions.set(accountId, { ...existing, pollInterval: interval });
 }
+
+// ─────────────────────────────────────────────
+//  RESTORE SESSION AT SERVER STARTUP
+// ─────────────────────────────────────────────
+
+export const restoreInstagramConnector = async (accountId) => {
+  const { data: acc } = await supabase.from('accounts')
+    .select('username, metadata').eq('id', accountId).maybeSingle();
+  const igState = acc?.metadata?.ig_state;
+  if (!igState) return null;
+
+  try {
+    const ig = new IgApiClient();
+    ig.state.generateDevice(acc.username || 'user');
+    await ig.state.deserialize(igState);
+
+    // Quick auth check
+    const me = await ig.account.currentUser().catch(() => null);
+    if (!me) {
+      logger.warn(`[IG-RESTORE] Session expired for account ${accountId}`);
+      await supabase.from('accounts').update({ status: 'disconnected' }).eq('id', accountId);
+      return null;
+    }
+
+    igSessions.set(accountId, { ig });
+    _startPolling(accountId, ig, null);
+
+    logger.info(`[IG] Restored session for ${me.username} (account ${accountId})`);
+    return {
+      sendMessage: async (threadId, content) => {
+        const thread = ig.entity.directThread(threadId);
+        await thread.broadcastText(typeof content === 'string' ? content : content.text);
+        return { success: true };
+      },
+      disconnect: () => { igSessions.delete(accountId); }
+    };
+  } catch (e) {
+    logger.error(`[IG-RESTORE] ${e.message}`);
+    return null;
+  }
+};

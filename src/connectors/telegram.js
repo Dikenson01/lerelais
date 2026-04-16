@@ -1,7 +1,11 @@
 /**
  * TELEGRAM MTProto USER CLIENT
- * Using gramjs — real user account sync (not just bot)
- * Same architecture as WhatsApp connector
+ * Using gramjs (telegram npm package) — real user account, not just bot
+ *
+ * FIXES:
+ * - Removed baseLogger (caused "this._log.info is not a function" crash)
+ * - Removed useWSS (caused random disconnections on Railway — use TCP instead)
+ * - Added autoReconnect + retryDelay for Railway's 15-min connection timeout
  */
 
 import { TelegramClient, Api } from 'telegram';
@@ -10,92 +14,90 @@ import { NewMessage } from 'telegram/events/index.js';
 import logger from '../utils/logger.js';
 import supabase from '../config/supabase.js';
 
-// Telegram API credentials (from https://my.telegram.org)
-// These are stored in Railway env vars: TELEGRAM_API_ID, TELEGRAM_API_HASH
 const getApiCredentials = () => ({
   apiId: parseInt(process.env.TELEGRAM_API_ID || '0'),
   apiHash: process.env.TELEGRAM_API_HASH || ''
 });
 
-// In-memory map: accountId → { client, step, phone, phoneCodeHash }
+// Recommended options for Railway (TCP, auto-reconnect, no WSS)
+const CLIENT_OPTIONS = {
+  connectionRetries: 10,
+  retryDelay: 2000,
+  autoReconnect: true,
+  // NO useWSS — TCP works better on Railway
+  // NO baseLogger — causes crash with "this._log.info is not a function"
+};
+
+// In-memory: accountId → { client, step, phone, phoneCodeHash }
 const tgSessions = new Map();
 
-/**
- * Step 1: Start Telegram auth — send code to phone
- * Returns: { step: 'code' } — frontend must prompt user for the code
- */
+// ─────────────────────────────────────────────
+//  STEP 1: Send SMS code
+// ─────────────────────────────────────────────
+
 export const startTelegramAuth = async (accountId, phoneNumber) => {
   const { apiId, apiHash } = getApiCredentials();
   if (!apiId || !apiHash) {
     throw new Error('TELEGRAM_API_ID / TELEGRAM_API_HASH manquants dans les variables Railway');
   }
 
-  // Auto-format French numbers (07... -> +337...)
+  // Normalize French numbers: 07... → +337...
   let cleanPhone = phoneNumber.replace(/\D/g, '');
   if (cleanPhone.startsWith('0') && cleanPhone.length === 10) {
     cleanPhone = '33' + cleanPhone.slice(1);
-  } else if (!cleanPhone.startsWith('33') && cleanPhone.length === 9) {
-    cleanPhone = '33' + cleanPhone;
   }
-  
-  const finalPhone = cleanPhone;
 
-  const client = new TelegramClient(new StringSession(''), apiId, apiHash, {
-    connectionRetries: 5,
-    useWSS: true,
-    baseLogger: {
-      info: (...args) => logger.info('[TG-INT]', ...args),
-      warn: (...args) => logger.warn('[TG-INT]', ...args),
-      error: (...args) => logger.error('[TG-INT]', ...args),
-      debug: () => {}
-    }
-  });
+  const { data: acc } = await supabase.from('accounts')
+    .select('metadata').eq('id', accountId).maybeSingle();
+  const savedSession = acc?.metadata?.tg_session || '';
+
+  const client = new TelegramClient(
+    new StringSession(savedSession),
+    apiId, apiHash,
+    CLIENT_OPTIONS
+  );
 
   await client.connect();
 
-  // Send code
-  try {
-    const { phoneCodeHash } = await client.sendCode({ apiId, apiHash }, finalPhone);
-    tgSessions.set(accountId, { client, phone: finalPhone, phoneCodeHash, step: 'code' });
-    logger.info(`[TG] Code sent to ${finalPhone} for account ${accountId}`);
-    return { step: 'code' };
-  } catch (err) {
-    logger.error(`[TG-CODE-ERR] ${err.message}`);
-    throw err;
-  }
+  const { phoneCodeHash } = await client.sendCode({ apiId, apiHash }, cleanPhone);
+
+  tgSessions.set(accountId, { client, phone: cleanPhone, phoneCodeHash, step: 'code' });
+
+  await supabase.from('accounts').update({
+    status: 'pairing',
+    metadata: { ...(acc?.metadata || {}), tg_phone: cleanPhone, tg_step: 'code' }
+  }).eq('id', accountId);
+
+  logger.info(`[TG] Code sent to +${cleanPhone} for account ${accountId}`);
+  return { step: 'code' };
 };
 
-/**
- * Alternative: QR Code login
- */
+// ─────────────────────────────────────────────
+//  QR CODE LOGIN (alternative)
+// ─────────────────────────────────────────────
+
 export const startTelegramQR = async (accountId) => {
   const { apiId, apiHash } = getApiCredentials();
-  const client = new TelegramClient(new StringSession(''), apiId, apiHash, {
-    connectionRetries: 5,
-    useWSS: true,
-    baseLogger: {
-      info: (...args) => logger.info('[TG-QR-INT]', ...args),
-      warn: (...args) => logger.warn('[TG-QR-INT]', ...args),
-      error: (...args) => logger.error('[TG-QR-INT]', ...args),
-      debug: () => {}
-    }
-  });
+  if (!apiId || !apiHash) throw new Error('TELEGRAM_API_ID / TELEGRAM_API_HASH manquants');
 
+  const client = new TelegramClient(new StringSession(''), apiId, apiHash, CLIENT_OPTIONS);
   await client.connect();
-  
+
   let currentQR = null;
+
+  // Fire and forget — resolves when user scans QR
   const qrPromise = client.signInUserWithQrCode({ apiId, apiHash }, {
-    qrCode: (qr) => {
-      // qr.token is what we need to encode or show
-      const qrUrl = `tg://login?token=${qr.token.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '')}`;
-      currentQR = qrUrl;
+    qrCode: async (qr) => {
+      const b64 = qr.token.toString('base64url');
+      currentQR = `tg://login?token=${b64}`;
+      logger.info(`[TG-QR] New QR token generated for ${accountId}`);
     },
-    onError: (err) => logger.error('[TG-QR-ERR]', err.message)
-  });
+    onError: (err) => logger.warn('[TG-QR-ERR]', err.message)
+  }).catch(() => {});
 
   tgSessions.set(accountId, { client, qrPromise, getQR: () => currentQR, step: 'qr' });
-  
-  // Wait a bit for the first QR
+
+  // Wait up to 5s for first QR
   for (let i = 0; i < 10; i++) {
     if (currentQR) break;
     await new Promise(r => setTimeout(r, 500));
@@ -107,67 +109,72 @@ export const startTelegramQR = async (accountId) => {
 export const checkTelegramQRStatus = async (accountId) => {
   const session = tgSessions.get(accountId);
   if (!session) return { status: 'unknown' };
-  
-  const { client, qrPromise, getQR } = session;
-  const qr = getQR ? getQR() : null;
 
-  if (await client.isUserAuthorized()) {
-    // Already logged in! Finish up
-    const sessionStr = client.session.save();
-    const me = await client.getMe();
-    const displayName = [me.firstName, me.lastName].filter(Boolean).join(' ') || me.username;
+  const { client, getQR } = session;
 
-    await supabase.from('accounts').update({
-      status: 'connected',
-      username: me.username || me.id?.toString(),
-      account_name: displayName,
-      metadata: { tg_session: sessionStr, tg_user_id: me.id?.toString(), tg_step: 'connected' }
-    }).eq('id', accountId);
+  try {
+    if (await client.isUserAuthorized()) {
+      const sessionStr = client.session.save();
+      const me = await client.getMe();
+      const displayName = [me.firstName, me.lastName].filter(Boolean).join(' ') || me.username;
 
-    await attachTelegramListeners(accountId, client);
-    return { status: 'connected', displayName };
+      await supabase.from('accounts').update({
+        status: 'connected',
+        username: me.username || me.id?.toString(),
+        account_name: displayName,
+        metadata: { tg_session: sessionStr, tg_user_id: me.id?.toString(), tg_step: 'connected' }
+      }).eq('id', accountId);
+
+      await attachTelegramListeners(accountId, client);
+      return { status: 'connected', displayName };
+    }
+  } catch (e) {
+    logger.warn('[TG-QR-STATUS]', e.message);
   }
 
-  return { status: 'pairing', qr };
+  return { status: 'pairing', qr: getQR ? getQR() : null };
 };
 
-/**
- * Step 2: Verify code (+ optional 2FA password)
- * Returns: { step: 'connected' } or { step: '2fa' } if 2FA required
- */
+// ─────────────────────────────────────────────
+//  STEP 2: Verify SMS code (+ optional 2FA)
+// ─────────────────────────────────────────────
+
 export const verifyTelegramCode = async (accountId, code, password2fa = null) => {
   const session = tgSessions.get(accountId);
   if (!session) throw new Error('Session introuvable, recommencez');
 
   const { client, phone, phoneCodeHash } = session;
+  const { apiId, apiHash } = getApiCredentials();
+
+  // Reconnect if needed (Railway can drop connections)
+  if (!client.connected) {
+    logger.info(`[TG-VERIFY] Reconnecting client for +${phone}...`);
+    await client.connect();
+  }
 
   try {
-    if (!client.connected) {
-      logger.info(`[TG-VERIFY] Reconnecting client for ${phone}...`);
-      await client.connect();
-    }
-    await client.invoke(
-      new Api.auth.SignIn({
-        phoneNumber: phone,
-        phoneCodeHash: phoneCodeHash,
-        phoneCode: code
-      })
-    );
+    await client.invoke(new Api.auth.SignIn({
+      phoneNumber: phone,
+      phoneCodeHash,
+      phoneCode: code.trim()
+    }));
   } catch (err) {
-    if (err.message?.includes('SESSION_PASSWORD_NEEDED') || err.errorMessage === 'SESSION_PASSWORD_NEEDED') {
+    const msg = err.message || err.errorMessage || '';
+    if (msg.includes('SESSION_PASSWORD_NEEDED')) {
       if (!password2fa) {
         tgSessions.set(accountId, { ...session, step: '2fa' });
         return { step: '2fa' };
       }
-      // Apply 2FA
-      await client.signInWithPassword({ apiId: getApiCredentials().apiId, apiHash: getApiCredentials().apiHash },
-        { password: password2fa });
+      await client.signInWithPassword({ apiId, apiHash }, { password: password2fa });
+    } else if (msg.includes('PHONE_CODE_INVALID')) {
+      throw new Error('Code incorrect. Réessayez.');
+    } else if (msg.includes('PHONE_CODE_EXPIRED')) {
+      throw new Error('Code expiré. Recommencez la connexion.');
     } else {
       throw err;
     }
   }
 
-  // Connected! Save session string
   const sessionStr = client.session.save();
   const me = await client.getMe();
   const displayName = [me.firstName, me.lastName].filter(Boolean).join(' ') || me.username || phone;
@@ -176,23 +183,27 @@ export const verifyTelegramCode = async (accountId, code, password2fa = null) =>
     status: 'connected',
     username: me.username || phone,
     account_name: displayName,
-    metadata: { tg_session: sessionStr, tg_phone: phone, tg_user_id: me.id?.toString(), tg_step: 'connected' }
+    metadata: {
+      tg_session: sessionStr,
+      tg_phone: phone,
+      tg_user_id: me.id?.toString(),
+      tg_step: 'connected'
+    }
   }).eq('id', accountId);
 
   logger.info(`[TG] Connected as ${displayName} (account ${accountId})`);
-
-  // Start message listener in background
   await attachTelegramListeners(accountId, client);
-  tgSessions.set(accountId, { ...session, client, step: 'connected', sessionStr });
+  tgSessions.set(accountId, { ...session, client, step: 'connected' });
 
   return { step: 'connected', displayName };
 };
 
-/**
- * Attach real-time message listeners and start background sync
- */
+// ─────────────────────────────────────────────
+//  MESSAGE LISTENERS + DIALOG SYNC
+// ─────────────────────────────────────────────
+
 const attachTelegramListeners = async (accountId, client) => {
-  // Sync existing dialogs (conversations)
+  // 1. Sync existing dialogs
   try {
     logger.info(`[TG] Syncing dialogs for account ${accountId}...`);
     const dialogs = await client.getDialogs({ limit: 100 });
@@ -201,10 +212,10 @@ const attachTelegramListeners = async (accountId, client) => {
       if (!dialog.isUser && !dialog.isGroup && !dialog.isChannel) continue;
 
       const externalId = dialog.id?.toString();
+      if (!externalId) continue;
       const title = dialog.title || dialog.name || externalId;
       const isGroup = dialog.isGroup || dialog.isChannel;
 
-      // Upsert contact
       let contactId = null;
       if (!isGroup) {
         const { data: contact } = await supabase.from('contacts').upsert({
@@ -212,13 +223,11 @@ const attachTelegramListeners = async (accountId, client) => {
           external_id: externalId,
           display_name: title,
           platform: 'telegram',
-          phone_number: dialog.entity?.phone || null,
-          avatar_url: null
+          phone_number: dialog.entity?.phone ? `+${dialog.entity.phone}` : null,
         }, { onConflict: 'account_id, external_id', ignoreDuplicates: false }).select('id').single();
         contactId = contact?.id;
       }
 
-      // Upsert conversation
       await supabase.from('conversations').upsert({
         account_id: accountId,
         external_id: externalId,
@@ -235,7 +244,7 @@ const attachTelegramListeners = async (accountId, client) => {
     logger.error(`[TG-SYNC] ${e.message}`);
   }
 
-  // Listen for new messages in real time
+  // 2. Real-time listener for new messages
   client.addEventHandler(async (event) => {
     try {
       const msg = event.message;
@@ -246,53 +255,70 @@ const attachTelegramListeners = async (accountId, client) => {
 
       const text = msg.text || msg.message || '';
       const isFromMe = msg.out || false;
+      const msgDate = new Date((msg.date || Date.now() / 1000) * 1000);
 
-      // Resolve conversation
-      const { data: conv } = await supabase.from('conversations')
+      // Find or create conversation
+      let { data: conv } = await supabase.from('conversations')
         .select('id').eq('account_id', accountId).eq('external_id', chatId).maybeSingle();
 
-      let convId = conv?.id;
-      if (!convId) {
-        // Create new conversation on first message
+      if (!conv) {
         try {
           const entity = await client.getEntity(msg.chatId || msg.peerId);
-          const title = entity.firstName
+          const entityTitle = entity.firstName
             ? [entity.firstName, entity.lastName].filter(Boolean).join(' ')
             : (entity.title || chatId);
-          const isGroup = !!(entity.megagroup || entity.gigagroup || entity.broadcast || entity.migratedTo);
+          const isGroup = !!(entity.megagroup || entity.gigagroup || entity.broadcast);
+
+          // Upsert contact if 1:1
+          let contactId = null;
+          if (!isGroup) {
+            const { data: contact } = await supabase.from('contacts').upsert({
+              account_id: accountId,
+              external_id: chatId,
+              display_name: entityTitle,
+              platform: 'telegram',
+              phone_number: entity.phone ? `+${entity.phone}` : null,
+            }, { onConflict: 'account_id, external_id', ignoreDuplicates: false }).select('id').single();
+            contactId = contact?.id;
+          }
 
           const { data: newConv } = await supabase.from('conversations').upsert({
             account_id: accountId,
             external_id: chatId,
             platform: 'telegram',
-            title,
+            title: entityTitle,
             is_group: isGroup,
-            last_message_at: new Date(),
+            contact_id: contactId,
+            last_message_at: msgDate,
             last_message_preview: text.slice(0, 120)
           }, { onConflict: 'account_id, external_id' }).select('id').single();
-          convId = newConv?.id;
-        } catch (e) { return; }
+          conv = newConv;
+        } catch (e) {
+          logger.warn(`[TG-CONV-CREATE] ${e.message}`);
+          return;
+        }
       }
 
-      if (!convId) return;
+      if (!conv) return;
 
       // Insert message
       await supabase.from('messages').upsert({
-        conversation_id: convId,
+        conversation_id: conv.id,
         account_id: accountId,
         remote_id: msg.id?.toString(),
         sender_id: isFromMe ? accountId : chatId,
         content: text || (msg.media ? '[Média]' : ''),
         is_from_me: isFromMe,
-        timestamp: new Date((msg.date || Date.now() / 1000) * 1000),
-        metadata: { tg_msg_id: msg.id, pushName: null }
+        timestamp: msgDate,
+        metadata: { tg_msg_id: msg.id }
       }, { onConflict: 'remote_id' });
 
-      // Update preview
+      // Update conversation preview
       await supabase.from('conversations').update({
         last_message_preview: text.slice(0, 120),
-        last_message_at: new Date((msg.date || Date.now() / 1000) * 1000)
-      }).eq('id', convId);
+        last_message_at: msgDate
+      }).eq('id', conv.id);
+
     } catch (e) {
       logger.error(`[TG-MSG] ${e.message}`);
     }
@@ -301,9 +327,28 @@ const attachTelegramListeners = async (accountId, client) => {
   logger.info(`[TG] Real-time listener attached for ${accountId}`);
 };
 
-/**
- * Restore Telegram session on server startup
- */
+// ─────────────────────────────────────────────
+//  SEND MESSAGE
+// ─────────────────────────────────────────────
+
+export const sendTelegramMessage = async (accountId, chatId, text) => {
+  const session = tgSessions.get(accountId);
+  if (!session?.client) throw new Error('Session Telegram non active');
+
+  if (!session.client.connected) {
+    await session.client.connect();
+  }
+
+  // chatId can be a numeric string — convert properly
+  const peer = isNaN(chatId) ? chatId : parseInt(chatId);
+  await session.client.sendMessage(peer, { message: text });
+  return { success: true };
+};
+
+// ─────────────────────────────────────────────
+//  RESTORE SESSION AT SERVER STARTUP
+// ─────────────────────────────────────────────
+
 export const restoreTelegramConnector = async (accountId) => {
   const { apiId, apiHash } = getApiCredentials();
   if (!apiId || !apiHash) return null;
@@ -314,53 +359,35 @@ export const restoreTelegramConnector = async (accountId) => {
   if (!savedSession) return null;
 
   try {
-    const client = new TelegramClient(new StringSession(savedSession), apiId, apiHash, {
-      connectionRetries: 5,
-      useWSS: true,
-      baseLogger: {
-        info: (...args) => logger.info('[TG-INT]', ...args),
-        warn: (...args) => logger.warn('[TG-INT]', ...args),
-        error: (...args) => logger.error('[TG-INT]', ...args),
-        debug: () => {}
-      }
-    });
+    const client = new TelegramClient(
+      new StringSession(savedSession),
+      apiId, apiHash,
+      CLIENT_OPTIONS
+    );
 
     await client.connect();
+
     if (!await client.isUserAuthorized()) {
-      logger.warn(`[TG] Session expired for ${accountId}`);
+      logger.warn(`[TG] Session expired for account ${accountId}`);
       await supabase.from('accounts').update({ status: 'disconnected' }).eq('id', accountId);
       return null;
     }
 
     const me = await client.getMe();
-    logger.info(`[TG] Restored session for ${me.username || accountId}`);
+    logger.info(`[TG] Restored session for ${me.username || me.id} (account ${accountId})`);
 
     await attachTelegramListeners(accountId, client);
     tgSessions.set(accountId, { client, step: 'connected' });
 
     return {
-      sendMessage: async (chatId, text) => {
-        try {
-          await client.sendMessage(chatId, { message: text });
-          return { success: true };
-        } catch (e) {
-          return { success: false, error: e.message };
-        }
-      },
-      disconnect: async () => { await client.disconnect(); }
+      sendMessage: async (chatId, text) => sendTelegramMessage(accountId, chatId, text),
+      disconnect: async () => {
+        try { await client.disconnect(); } catch(e){}
+        tgSessions.delete(accountId);
+      }
     };
   } catch (e) {
     logger.error(`[TG-RESTORE] ${e.message}`);
     return null;
   }
-};
-
-/**
- * Send a message via an existing Telegram session
- */
-export const sendTelegramMessage = async (accountId, chatId, text) => {
-  const session = tgSessions.get(accountId);
-  if (!session?.client) throw new Error('Session Telegram non active');
-  await session.client.sendMessage(chatId, { message: text });
-  return { success: true };
 };
