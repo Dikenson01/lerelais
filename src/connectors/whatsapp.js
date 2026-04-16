@@ -261,9 +261,9 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
     if (byJid) return byJid.id;
 
     // FIX: ne pas stocker un @lid numeric ID comme titre (ex: "165025629102191")
-    // → utiliser null pour les @lid sans vrai nom ; le frontend affichera "Contact WhatsApp"
+    // → utiliser le numéro formaté si dispo, sinon le JID brut
     const cleanTitle = (title && isRealName(title)) ? title
-      : (!jid.endsWith('@lid') ? jid.split('@')[0] : null);
+      : (!jid.endsWith('@lid') ? formatPhone(jid) : null);
 
     const { data: conv } = await supabase.from('conversations').upsert({
       account_id: accountId,
@@ -342,12 +342,22 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
   };
 
   // Returns true if a string is a real name (not a raw JID / numeric ID fallback)
-  const isRealName = (str) => {
-    if (!str) return false;
-    if (str.includes('@')) return false; // raw JID
-    const clean = str.replace(/[+\s\-]/g, '');
-    if (/^\d{10,}$/.test(clean)) return false; // pure phone number / numeric ID
+  const isRealName = (name) => {
+    if (!name) return false;
+    // Ignore raw numeric IDs (LID or phone)
+    const clean = name.replace(/[+\s-]/g, '');
+    if (/^\d{10,}$/.test(clean)) return false;
+    if (name.toLowerCase().includes('contact whatsapp')) return false;
     return true;
+  };
+
+  const formatPhone = (jid) => {
+    if (!jid || jid.endsWith('@g.us')) return jid;
+    const num = jid.split('@')[0].split(':')[0]; // strip device suffix just in case
+    if (num.startsWith('33') && num.length === 11) {
+      return `+33 ${num.slice(2, 3)} ${num.slice(3, 5)} ${num.slice(5, 7)} ${num.slice(7, 9)} ${num.slice(9)}`;
+    }
+    return `+${num}`;
   };
 
   const upsertContact = async (jid, name, lidValue = null) => {
@@ -1145,8 +1155,8 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
         const jid = jidNormalizedUser(contact.id);
         const lid = contact.id.endsWith('@lid') ? jid : null;
         // FIXED: never fall back to jid.split('@')[0] as a name (stores raw numeric ID like "176008481255424")
-        // For @lid contacts without a real name, use null → UI shows 'Inconnu' until contacts.update provides the real name
-        const name = contact.name || contact.notify || (jid.endsWith('@lid') ? null : jid.split('@')[0]);
+        // Use formatted phone number (+33...) for better UX than generic "Contact WhatsApp"
+        const name = contact.name || contact.notify || (jid.endsWith('@lid') ? null : formatPhone(jid));
 
         await upsertContact(jid, name, lid);
 
