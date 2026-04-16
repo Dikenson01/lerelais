@@ -166,13 +166,10 @@ export const verifyTelegramCode = async (accountId, code, password2fa = null) =>
         return { step: '2fa' };
       }
       logger.info(`[TG-VERIFY] 2FA password provided for +${phone}.`);
-      await client.signInWithPassword({
-        apiId: apiId,
-        apiHash: apiHash,
+      await client.signIn({
         phoneNumber: phone,
+        password: async () => password2fa,
         onError: (err) => { throw err; }
-      }, {
-        password: password2fa
       });
     } else if (msg.includes('PHONE_CODE_INVALID')) {
       throw new Error('Code incorrect. Réessayez.');

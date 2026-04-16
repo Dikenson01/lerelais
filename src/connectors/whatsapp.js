@@ -373,11 +373,13 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
       phone_number: phone,
       metadata: { lid: lidValue }
     };
-    if (hasRealName) upsertPayload.display_name = name;
+    
+    // Always provide a name — use formatted phone as last resort if WA name is missing or generic
+    upsertPayload.display_name = (hasRealName) ? name : (phone ? formatPhone(jid) : name);
 
     const { data: contact } = await supabase.from('contacts').upsert(upsertPayload, {
       onConflict: 'account_id, external_id',
-      ignoreDuplicates: !hasRealName  // preserve existing name if we don't have a better one
+      ignoreDuplicates: false // ALWAYS update to replace generic names with better ones
     }).select('id, avatar_url').single();
 
     // Fetch photo de profil si absente — stockage permanent dans Supabase Storage
