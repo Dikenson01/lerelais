@@ -9,6 +9,7 @@
  */
 
 import { TelegramClient, Api } from 'telegram';
+import { computeCheck } from 'telegram/Password.js';
 import { StringSession } from 'telegram/sessions/index.js';
 import { NewMessage } from 'telegram/events/index.js';
 import logger from '../utils/logger.js';
@@ -153,33 +154,30 @@ export const verifyTelegramCode = async (accountId, code, password2fa = null) =>
   }
 
   try {
-    await client.invoke(new Api.auth.SignIn({
-      phoneNumber: phone,
-      phoneCodeHash,
-      phoneCode: code.trim()
-    }));
+    if (!password2fa) {
+      await client.invoke(new Api.auth.SignIn({
+        phoneNumber: phone,
+        phoneCodeHash,
+        phoneCode: code.trim()
+      }));
+    } else {
+      // 2FA Flow — Manual SRP to avoid PHONE_CODE_INVALID
+      logger.info(`[TG-VERIFY] Checking 2FA with SRP for +${phone}...`);
+      const passwordSrpResult = await client.invoke(new Api.account.GetPassword());
+      const srpCheck = await computeCheck(passwordSrpResult, password2fa);
+      await client.invoke(new Api.auth.CheckPassword({
+        password: srpCheck
+      }));
+    }
   } catch (err) {
     const msg = err.message || err.errorMessage || '';
     if (msg.includes('SESSION_PASSWORD_NEEDED')) {
-      if (!password2fa) {
-        tgSessions.set(accountId, { ...session, step: '2fa' });
-        return { step: '2fa' };
-      }
-      logger.info(`[TG-VERIFY] 2FA password provided for +${phone}.`);
-      // client.start is the only reliable way to handle SRP (2FA) in GramJS
-      await client.start({
-        phoneNumber: async () => phone,
-        phoneCode: async () => code,
-        password: async () => password2fa,
-        onError: (err) => {
-          logger.error(`[TG-START-ERR] ${err.message}`);
-          throw err;
-        }
-      });
+      tgSessions.set(accountId, { ...session, step: '2fa' });
+      return { step: '2fa' };
     } else if (msg.includes('PHONE_CODE_INVALID')) {
-      throw new Error('Code incorrect. Réessayez.');
-    } else if (msg.includes('PHONE_CODE_EXPIRED')) {
-      throw new Error('Code expiré. Recommencez la connexion.');
+      throw new Error('Code incorrect ou expiré. Recommencez.');
+    } else if (msg.includes('PASSWORD_HASH_INVALID')) {
+      throw new Error('Mot de passe 2FA incorrect.');
     } else {
       throw err;
     }

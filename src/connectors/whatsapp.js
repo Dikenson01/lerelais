@@ -344,10 +344,12 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
   // Returns true if a string is a real name (not a raw JID / numeric ID fallback)
   const isRealName = (name) => {
     if (!name) return false;
-    // Ignore raw numeric IDs (LID or phone)
+    const n = name.toLowerCase();
+    if (n.includes('contact whatsapp')) return false;
+    // Fallback names like "+33..." are real enough for UI, but raw JIDs are not
+    if (n.includes('@s.whatsapp.net') || n.includes('@lid')) return false;
     const clean = name.replace(/[+\s-]/g, '');
-    if (/^\d{10,}$/.test(clean)) return false;
-    if (name.toLowerCase().includes('contact whatsapp')) return false;
+    if (/^\d{12,}$/.test(clean)) return false; // Raw numeric ID
     return true;
   };
 
@@ -363,19 +365,15 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
   const upsertContact = async (jid, name, lidValue = null) => {
     const phone = (!jid.endsWith('@lid') && !jid.endsWith('@g.us')) ? jid.split('@')[0] : null;
     const hasRealName = isRealName(name);
+    const finalName = hasRealName ? name : (phone ? formatPhone(jid) : name);
 
-    // NEVER overwrite an existing real name with a numeric fallback ID.
-    // If we have a real name → update (ignoreDuplicates: false)
-    // If we only have a numeric/JID fallback → preserve existing value (ignoreDuplicates: true)
     const upsertPayload = {
       account_id: accountId,
       external_id: jid,
       phone_number: phone,
+      display_name: finalName,
       metadata: { lid: lidValue }
     };
-    
-    // Always provide a name — use formatted phone as last resort if WA name is missing or generic
-    upsertPayload.display_name = (hasRealName) ? name : (phone ? formatPhone(jid) : name);
 
     const { data: contact } = await supabase.from('contacts').upsert(upsertPayload, {
       onConflict: 'account_id, external_id',
