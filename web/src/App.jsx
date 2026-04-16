@@ -346,19 +346,26 @@ export default function App() {
     const dn = contact?.display_name;
     if (dn) {
       // Skip raw JIDs stored as display_name (these are legacy bad data)
-      if (dn.includes('@s.whatsapp.net')) return formatName(contact?.phone_number || dn);
-      // For @lid raw IDs, show the number but the backend will resolve the real name soon
-      const clean = dn.replace(/[+\s-@lid]/g, '');
-      if (/^\d{12,}$/.test(clean) && !dn.includes('@')) {
-        // Pure numeric ID without @lid — legacy data, show as-is (will be fixed by cleanup job)
-        return contact?.phone_number ? formatName(contact.phone_number) : dn;
+      if (dn.includes('@s.whatsapp.net') || dn.includes('@lid')) {
+        return contact?.phone_number ? formatName(contact.phone_number) : 'Contact WhatsApp';
+      }
+      const clean = dn.replace(/[+\s-]/g, '');
+      // Pure numeric ID (12+ digits) = @lid ID stored as name → don't show it
+      if (/^\d{10,}$/.test(clean)) {
+        return contact?.phone_number ? formatName(contact.phone_number) : 'Contact WhatsApp';
       }
       // It's a real name or formatted phone number
       return formatName(dn);
     }
     // Fallback: phone_number or external_id
     if (contact?.phone_number) return formatName(contact.phone_number);
-    if (contact?.external_id) return formatName(contact.external_id);
+    // external_id fallback — mask numeric @lid IDs
+    const ext = contact?.external_id?.split('@')[0];
+    if (ext) {
+      const cleanExt = ext.replace(/[-\s]/g, '');
+      if (/^\d{10,}$/.test(cleanExt)) return 'Contact WhatsApp';
+      return formatName(ext);
+    }
     return 'Inconnu';
   };
 
@@ -368,15 +375,25 @@ export default function App() {
        const dn = c.display_name;
        // Skip raw JIDs (legacy bad data)
        if (dn.includes('@s.whatsapp.net') || dn.includes('@lid')) {
-         return conv.title ? formatName(conv.title) : formatName(conv.external_id);
+         // fall through to title/external_id check below
+       } else {
+         const cleanDn = dn.replace(/[+\s-]/g, '');
+         // If display_name is a 12+ digit pure number (stored as ID fallback), skip it
+         if (/^\d{10,}$/.test(cleanDn)) {
+           // use phone_number if available, otherwise fall through
+           if (c.phone_number) return formatName(c.phone_number);
+         } else if (dn && dn !== 'null') {
+           return dn; // Real name ✓
+         }
        }
-       const cleanDn = dn.replace(/[+\s-]/g, '');
-       // If display_name is a 12+ digit pure number (stored as ID fallback) — use title instead
-       if (/^\d{12,}$/.test(cleanDn) && c.phone_number) return formatName(c.phone_number);
-       if (dn && dn !== 'null') return dn; // Real name
     }
-    // Fallback: conv title (can be a name or a phone number)
-    return conv.title ? formatName(conv.title) : formatName(conv.external_id);
+    // Fallback: conv title — but NEVER show a raw numeric @lid ID to the user
+    const fallback = conv.title || conv.external_id?.split('@')[0];
+    if (!fallback) return 'Contact WhatsApp';
+    // If fallback is a pure numeric string (possibly with dashes) → it's a raw @lid ID
+    const cleanFallback = fallback.replace(/[-\s]/g, '');
+    if (/^\d{10,}$/.test(cleanFallback)) return 'Contact WhatsApp';
+    return formatName(fallback);
   };
 
   const toggleArchive = async (conv) => {

@@ -260,12 +260,17 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
     const { data: byJid } = await supabase.from('conversations').select('id').eq('account_id', accountId).eq('external_id', jid).maybeSingle();
     if (byJid) return byJid.id;
 
+    // FIX: ne pas stocker un @lid numeric ID comme titre (ex: "165025629102191")
+    // → utiliser null pour les @lid sans vrai nom ; le frontend affichera "Contact WhatsApp"
+    const cleanTitle = (title && isRealName(title)) ? title
+      : (!jid.endsWith('@lid') ? jid.split('@')[0] : null);
+
     const { data: conv } = await supabase.from('conversations').upsert({
       account_id: accountId,
       external_id: jid,
       contact_id: contact_id,
       platform: 'whatsapp',
-      title: title || jid.split('@')[0],
+      title: cleanTitle,
       is_group: isGroup,
       last_message_at: new Date()
     }, { onConflict: 'account_id, external_id' }).select('id').single();
@@ -544,6 +549,58 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
             logger.warn('[WA-CLEANUP] Could not clean up @lid contacts:', e.message);
           }
 
+          // 0b. DEDUP: pour chaque contact @lid dont on connaît le numéro (metadata.pn),
+          // copier le nom + avatar du contact @s.whatsapp.net correspondant
+          // → les deux conversations afficheront le même vrai nom
+          try {
+            const { data: lidContacts } = await supabase.from('contacts')
+              .select('id, external_id, display_name, avatar_url, metadata')
+              .eq('account_id', accountId)
+              .like('external_id', '%@lid');
+
+            for (const lidC of (lidContacts || [])) {
+              const pn = lidC.metadata?.pn;
+              if (!pn) continue;
+              const phoneJid = `${pn}@s.whatsapp.net`;
+              const { data: phoneC } = await supabase.from('contacts')
+                .select('id, display_name, avatar_url')
+                .eq('account_id', accountId)
+                .eq('external_id', phoneJid)
+                .maybeSingle();
+              if (!phoneC) continue;
+
+              const updates = {};
+              if (isRealName(phoneC.display_name) && !isRealName(lidC.display_name)) {
+                updates.display_name = phoneC.display_name;
+              }
+              if (phoneC.avatar_url && !lidC.avatar_url) {
+                updates.avatar_url = phoneC.avatar_url;
+              }
+              if (Object.keys(updates).length > 0) {
+                await supabase.from('contacts').update({ ...updates, phone_number: pn }).eq('id', lidC.id);
+                logger.info(`[WA-DEDUP] @lid ${lidC.external_id} → copié "${phoneC.display_name}" depuis ${phoneJid}`);
+              }
+
+              // Fusionner les conversations du @lid dans la conversation du contact phone
+              const { data: phoneConv } = await supabase.from('conversations')
+                .select('id').eq('account_id', accountId).eq('contact_id', phoneC.id)
+                .order('last_message_at', { ascending: false }).limit(1).maybeSingle();
+              if (phoneConv) {
+                // Rediriger les messages de la conv @lid vers la conv phone
+                const { data: lidConvs } = await supabase.from('conversations')
+                  .select('id').eq('account_id', accountId).eq('contact_id', lidC.id);
+                for (const lc of (lidConvs || [])) {
+                  if (lc.id === phoneConv.id) continue;
+                  await supabase.from('messages').update({ conversation_id: phoneConv.id }).eq('conversation_id', lc.id);
+                  await supabase.from('conversations').delete().eq('id', lc.id);
+                  logger.info(`[WA-DEDUP] Fusionné conversation @lid ${lc.id} dans ${phoneConv.id}`);
+                }
+              }
+            }
+          } catch (e) {
+            logger.warn('[WA-DEDUP]', e.message);
+          }
+
           // 1. Lier les conversations orphelines à leurs contacts
           const { data: convs } = await supabase.from('conversations').select('id, title, external_id, contact_id').eq('account_id', accountId);
           if (convs) {
@@ -792,9 +849,12 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
           refreshAllContactsMetadata(); // Lancer en arrière-plan sans await
 
           logger.info('[WA-MAINTENANCE] Post-connection maintenance finished.');
-          
-          // Lancement de la synchronisation de l'historique en cascade
-          startHistoryCascadeWorker();
+
+          // NOTE: startHistoryCascadeWorker désactivé — il envoyait des centaines de requêtes
+          // fetchMessageHistory en boucle, ce qui causait des messages "synchronisation lancée/arrêtée"
+          // en spam dans toutes les conversations. La synchronisation initiale (messaging-history.set)
+          // est suffisante pour récupérer l'historique récent.
+          // startHistoryCascadeWorker();
         }, 30000); // Démarrer 30s après connexion
       }
     });
@@ -817,11 +877,16 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
           preview = lastContent || (lastMedia ? icons[lastMedia.type] || '📎 Média' : null);
         }
 
+        // FIX: ne pas stocker un numeric @lid ID comme titre de conversation
+        const chatTitle = (chat.name && isRealName(chat.name))
+          ? chat.name
+          : (jid.endsWith('@lid') ? null : jid.split('@')[0]);
+
         const upsertData = {
           account_id: accountId,
           external_id: jid,
           platform: 'whatsapp',
-          title: chat.name || jid.split('@')[0],
+          title: chatTitle,
           is_group: isGroup,
           unread_count: chat.unreadCount || 0,
           metadata: {
@@ -924,9 +989,13 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
         if (messages && messages.length > 0) {
           const latestByJid = {};
           const mediaQueue = []; // File d'attente pour téléchargement en arrière-plan
-          
+
           for (const msg of messages) {
             if (!msg.message) continue;
+            // Filtrer les messages protocolaires du sync historique aussi
+            if (msg.message.protocolMessage) continue;
+            if (msg.message.senderKeyDistributionMessage) continue;
+            if (msg.message.appStateSyncKeyShare) continue;
             const jid = jidNormalizedUser(msg.key.remoteJid);
             const ts = (msg.messageTimestamp?.low || msg.messageTimestamp || 0) * 1000;
             
@@ -1180,6 +1249,17 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
 
       for (const msg of messages) {
         if (!msg.message) continue;
+        // --- FILTRE: ignorer les messages protocolaires/système ---
+        // Ces messages ne sont pas de vrais messages de chat et ne doivent pas
+        // apparaître dans la liste (delivery receipts, sync markers, clés, etc.)
+        if (msg.message.protocolMessage) continue;
+        if (msg.message.senderKeyDistributionMessage) continue;
+        if (msg.message.appStateSyncKeyShare) continue;
+        if (msg.message.historySyncNotification) continue;
+        if (msg.message.deviceSentMessage?.message?.protocolMessage) continue;
+        // Ignorer les messages de "synchronisation" générés par WA lors des syncs d'historique
+        const rawText = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
+        if (rawText.toLowerCase().includes('synchronisation') && rawText.length < 60) continue;
 
         const jid = jidNormalizedUser(msg.key.remoteJid);
         const isGroup = jid.endsWith('@g.us');
