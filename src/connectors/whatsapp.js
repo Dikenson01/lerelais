@@ -533,6 +533,27 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
         onEvent('status', { status: 'connected' });
         logger.info('[WA] Connected successfully!');
 
+        // --- CLEANUP GENERIC NAMES (V46) ---
+        // Search for any existing "Contact WhatsApp" entries and replace them with formatted numbers
+        (async () => {
+          try {
+            const { data: genericContacts } = await supabase.from('contacts')
+              .select('id, external_id')
+              .eq('account_id', accountId)
+              .ilike('display_name', '%Contact WhatsApp%');
+
+            if (genericContacts && genericContacts.length > 0) {
+              logger.info(`[WA-CLEANUP] Found ${genericContacts.length} generic contacts to rename.`);
+              for (const c of genericContacts) {
+                 const cleanName = formatPhone(c.external_id);
+                 await supabase.from('contacts').update({ display_name: cleanName }).eq('id', c.id);
+              }
+            }
+          } catch (e) {
+            logger.error(`[WA-CLEANUP-ERR] ${e.message}`);
+          }
+        })();
+
         setTimeout(async () => {
           // 0. ONE-TIME DATA CLEANUP: reset @lid contacts whose display_name is just the numeric ID
           // These were created with display_name = jid (bug fixed above) and show as raw numbers in UI.

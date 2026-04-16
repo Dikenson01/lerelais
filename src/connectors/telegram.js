@@ -166,10 +166,15 @@ export const verifyTelegramCode = async (accountId, code, password2fa = null) =>
         return { step: '2fa' };
       }
       logger.info(`[TG-VERIFY] 2FA password provided for +${phone}.`);
-      await client.signIn({
-        phoneNumber: phone,
+      // client.start is the only reliable way to handle SRP (2FA) in GramJS
+      await client.start({
+        phoneNumber: async () => phone,
+        phoneCode: async () => code,
         password: async () => password2fa,
-        onError: (err) => { throw err; }
+        onError: (err) => {
+          logger.error(`[TG-START-ERR] ${err.message}`);
+          throw err;
+        }
       });
     } else if (msg.includes('PHONE_CODE_INVALID')) {
       throw new Error('Code incorrect. Réessayez.');
