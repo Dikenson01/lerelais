@@ -24,6 +24,7 @@ import logger from '../utils/logger.js';
 import supabase from '../config/supabase.js';
 
 const SIGNAL_API = process.env.SIGNAL_API_URL || null;
+if (!SIGNAL_API) logger.warn('[SIGNAL] SIGNAL_API_URL is NOT set in environment variables!');
 
 // In-memory: accountId → { phone, pollInterval }
 const signalSessions = new Map();
@@ -112,7 +113,7 @@ export const checkSignalLinkStatus = async (accountId) => {
 
 export const registerSignal = async (accountId, phoneNumber) => {
   if (!await apiAvailable()) {
-    throw new Error('signal-cli-rest-api non disponible. Vérifiez SIGNAL_API_URL.');
+    throw new Error(`signal-cli-rest-api non disponible à ${SIGNAL_API}. Vérifiez SIGNAL_API_URL.`);
   }
 
   // Normalise le numéro (ajoute +33 si numéro français sans indicatif)

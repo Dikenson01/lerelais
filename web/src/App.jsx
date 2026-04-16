@@ -371,7 +371,7 @@ export default function App() {
         } catch (e) {}
       }, 3000);
     } catch (err) {
-      setSignalError(err.response?.data?.error || 'signal-cli non disponible');
+      setSignalError(err.response?.data?.error || 'Erreur connection Signal');
       setSignalStep('menu');
     }
   };
@@ -385,7 +385,7 @@ export default function App() {
       setSignalAccountId(r.data.accountId);
       setSignalStep('sms_code');
     } catch (err) {
-      setSignalError(err.response?.data?.error || 'Erreur Signal');
+      setSignalError(err.response?.data?.error || 'Erreur inscription Signal');
       setSignalStep('sms_phone');
     }
   };
