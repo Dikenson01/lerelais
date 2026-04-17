@@ -271,6 +271,10 @@ app.post('/api/conversations/ensure', async (req, res) => {
     let { data: conv } = await supabase.from('conversations')
       .select('*').eq('account_id', contact.account_id).eq('external_id', contact.external_id).maybeSingle();
 
+    // VÉRIFICATION DE SÉCURITÉ : Le contact appartient-il bien à l'utilisateur ?
+    const { data: acc } = await supabase.from('accounts').select('user_id').eq('id', contact.account_id).single();
+    if (acc?.user_id !== req.userId) return res.status(403).json({ error: 'Accès refusé' });
+
     if (!conv) {
       const { data: newConv, error } = await supabase.from('conversations').insert({
         account_id: contact.account_id,
@@ -327,6 +331,10 @@ app.post('/api/messages', async (req, res) => {
     const { data: conv } = await supabase.from('conversations').select('*').eq('id', conversationId).maybeSingle();
     if (!conv) return res.status(404).json({ error: 'Conversation introuvable' });
 
+    // VÉRIFICATION DE SÉCURITÉ : La conversation appartient-elle à l'utilisateur ?
+    const { data: acc } = await supabase.from('accounts').select('user_id').eq('id', conv.account_id).single();
+    if (acc?.user_id !== req.userId) return res.status(403).json({ error: 'Accès refusé' });
+
     const connector = activeConnectors[conv.account_id];
     let remoteId = `temp-${crypto.randomUUID()}`;
 
@@ -363,6 +371,10 @@ app.post('/api/messages/media', upload.single('file'), async (req, res) => {
   try {
     const { data: conv } = await supabase.from('conversations').select('*').eq('id', conversationId).maybeSingle();
     if (!conv) return res.status(404).json({ error: 'Conversation introuvable' });
+
+    // VÉRIFICATION DE SÉCURITÉ : La conversation appartient-elle à l'utilisateur ?
+    const { data: acc } = await supabase.from('accounts').select('user_id').eq('id', conv.account_id).single();
+    if (acc?.user_id !== req.userId) return res.status(403).json({ error: 'Accès refusé' });
 
     const connector = activeConnectors[conv.account_id];
     if (!connector) return res.status(503).json({ error: 'WhatsApp non connecté' });
@@ -428,7 +440,13 @@ app.post('/api/messages/media', upload.single('file'), async (req, res) => {
 app.post('/api/conversations/:id/archive', async (req, res) => {
   const { archived } = req.body;
   try {
-    const { data: conv } = await supabase.from('conversations').select('metadata').eq('id', req.params.id).single();
+    const { data: conv } = await supabase.from('conversations').select('id, account_id, metadata').eq('id', req.params.id).maybeSingle();
+    if (!conv) return res.status(404).json({ error: 'Conversation introuvable' });
+
+    // VÉRIFICATION DE SÉCURITÉ : Accès autorisé ?
+    const { data: acc } = await supabase.from('accounts').select('user_id').eq('id', conv.account_id).single();
+    if (acc?.user_id !== req.userId) return res.status(403).json({ error: 'Accès refusé' });
+
     const newMetadata = { ...(conv?.metadata || {}), is_archived: archived };
     await supabase.from('conversations').update({ metadata: newMetadata }).eq('id', req.params.id);
     res.json({ success: true });
@@ -492,9 +510,16 @@ app.post('/api/connect/whatsapp', async (req, res) => {
 });
 
 app.get('/api/connect/whatsapp/status/:id', async (req, res) => {
-  const qr = qrMap.get(req.params.id);
-  const { data: acc } = await supabase.from('accounts').select('status').eq('id', req.params.id).single();
-  res.json({ qr: qr || null, status: acc?.status || 'unknown' });
+  try {
+    const { data: acc } = await supabase.from('accounts').select('user_id, status').eq('id', req.params.id).maybeSingle();
+    if (!acc) return res.status(404).json({ error: 'Compte non trouvé' });
+    if (acc.user_id !== req.userId) return res.status(403).json({ error: 'Accès refusé' });
+
+    const qr = qrMap.get(req.params.id);
+    res.json({ qr: qr || null, status: acc.status || 'unknown' });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 app.delete('/api/accounts/:id', async (req, res) => {
@@ -576,6 +601,10 @@ app.post('/api/connect/telegram/qr/start', async (req, res) => {
 
 app.get('/api/connect/telegram/qr/status/:id', async (req, res) => {
   try {
+    const { data: acc } = await supabase.from('accounts').select('user_id').eq('id', req.params.id).maybeSingle();
+    if (!acc) return res.status(404).json({ error: 'Compte non trouvé' });
+    if (acc.user_id !== req.userId) return res.status(403).json({ error: 'Accès refusé' });
+
     const result = await checkTelegramQRStatus(req.params.id);
     res.json(result);
   } catch (e) {
