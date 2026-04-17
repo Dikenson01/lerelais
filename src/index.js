@@ -433,7 +433,7 @@ app.post('/api/messages/media', upload.single('file'), async (req, res) => {
     if (acc?.user_id !== req.userId) return res.status(403).json({ error: 'Accès refusé' });
 
     const connector = activeConnectors[conv.account_id];
-    if (!connector) return res.status(503).json({ error: 'WhatsApp non connecté' });
+    if (!connector) return res.status(503).json({ error: `Le compte ${conv.platform} n'est pas connecté au Hub.` });
 
     const mime = req.file.mimetype;
     const buffer = req.file.buffer;
@@ -441,18 +441,24 @@ app.post('/api/messages/media', upload.single('file'), async (req, res) => {
     let mediaType = 'document';
     let sentResult;
 
-    // Déterminer le type et envoyer
-    if (mime.startsWith('image/')) {
-      mediaType = 'image';
-      sentResult = await connector.sendMedia(conv.external_id, { image: buffer, mimetype: mime, caption: req.body.caption || '' });
-    } else if (mime.startsWith('video/')) {
-      mediaType = 'video';
-      sentResult = await connector.sendMedia(conv.external_id, { video: buffer, mimetype: mime, caption: req.body.caption || '' });
-    } else if (mime.startsWith('audio/')) {
-      mediaType = 'audio';
-      sentResult = await connector.sendMedia(conv.external_id, { audio: buffer, mimetype: mime, ptt: mime.includes('ogg') });
-    } else {
-      sentResult = await connector.sendMedia(conv.external_id, { document: buffer, mimetype: mime, fileName: req.file.originalname });
+    if (conv.platform === 'whatsapp') {
+      // Déterminer le type et envoyer pour WhatsApp
+      if (mime.startsWith('image/')) {
+        mediaType = 'image';
+        sentResult = await connector.sendMedia(conv.external_id, { image: buffer, mimetype: mime, caption: req.body.caption || '' });
+      } else if (mime.startsWith('video/')) {
+        mediaType = 'video';
+        sentResult = await connector.sendMedia(conv.external_id, { video: buffer, mimetype: mime, caption: req.body.caption || '' });
+      } else if (mime.startsWith('audio/')) {
+        mediaType = 'audio';
+        sentResult = await connector.sendMedia(conv.external_id, { audio: buffer, mimetype: mime, ptt: mime.includes('ogg') });
+      } else {
+        sentResult = await connector.sendMedia(conv.external_id, { document: buffer, mimetype: mime, fileName: req.file.originalname });
+      }
+    } else if (conv.platform === 'telegram') {
+      // Format générique pour Telegram
+      mediaType = mime.startsWith('image/') ? 'image' : mime.startsWith('video/') ? 'video' : mime.startsWith('audio/') ? 'audio' : 'document';
+      sentResult = await connector.sendMedia(conv.external_id, { file: buffer, mimetype: mime, caption: req.body.caption || '' });
     }
 
     if (sentResult?.success) remoteId = sentResult.messageId;
@@ -965,15 +971,21 @@ async function restoreConnectors() {
       if (acc.status === 'connected') {
         toRestore.push(acc);
       } else if (['pairing', 'disconnected'].includes(acc.status)) {
-        // Vérifier si une session active existe (creds.json)
-        const { data: session } = await supabase.from('account_sessions')
-          .select('id')
-          .eq('account_id', acc.id)
-          .eq('filename', 'NS:active:creds.json')
-          .maybeSingle();
-        
-        if (session) {
-          logger.info(`[RECOVERY] Account ${acc.id} (${acc.platform}) as session data but status is ${acc.status}. Restoring...`);
+        // WhatsApp use account_sessions / creds.json
+        if (acc.platform === 'whatsapp') {
+          const { data: session } = await supabase.from('account_sessions')
+            .select('id')
+            .eq('account_id', acc.id)
+            .eq('filename', 'NS:active:creds.json')
+            .maybeSingle();
+          if (session) toRestore.push(acc);
+        } 
+        // Telegram use metadata.tg_session
+        else if (acc.platform === 'telegram' && acc.metadata?.tg_session) {
+          toRestore.push(acc);
+        }
+        // Signal/Instagram use their own metadata logic
+        else if (['signal', 'instagram'].includes(acc.platform) && acc.metadata?.session) {
           toRestore.push(acc);
         }
       }

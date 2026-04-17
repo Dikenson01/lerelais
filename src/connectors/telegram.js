@@ -353,6 +353,26 @@ export const sendTelegramMessage = async (accountId, chatId, text) => {
   return { success: true };
 };
 
+export const sendTelegramMedia = async (accountId, chatId, { file, mimetype, caption }) => {
+  const session = tgSessions.get(accountId);
+  if (!session?.client) throw new Error('Session Telegram non active');
+
+  if (!session.client.connected) {
+    await session.client.connect();
+  }
+
+  const peer = isNaN(chatId) ? chatId : parseInt(chatId);
+  
+  // Create a Buffer from the file (which might be a Buffer or a path)
+  await session.client.sendFile(peer, {
+    file: file,
+    caption: caption || '',
+    forceDocument: !mimetype.startsWith('image/'),
+  });
+
+  return { success: true };
+};
+
 // ─────────────────────────────────────────────
 //  RESTORE SESSION AT SERVER STARTUP
 // ─────────────────────────────────────────────
@@ -389,6 +409,7 @@ export const restoreTelegramConnector = async (accountId) => {
 
     return {
       sendMessage: async (chatId, text) => sendTelegramMessage(accountId, chatId, text),
+      sendMedia: async (chatId, media) => sendTelegramMedia(accountId, chatId, media),
       disconnect: async () => {
         try { await client.disconnect(); } catch(e){}
         tgSessions.delete(accountId);

@@ -499,23 +499,25 @@ export default function App() {
       }
       const clean = dn.replace(/[+\s-]/g, '');
       // Pure numeric ID (12+ digits) = @lid ID stored as name → don't show it
-      if (/^\d{10,}$/.test(clean)) {
-        return contact?.phone_number ? formatName(contact.phone_number) : 'Contact WhatsApp';
-      }
-      // It's a real name or formatted phone number
-      return formatName(dn);
+    const clean = dn.replace(/[+\s-]/g, '');
+    // Pure numeric ID (12+ digits) = @lid ID stored as name → don't show it
+    if (/^\d{10,}$/.test(clean)) {
+      return contact?.phone_number ? formatName(contact.phone_number) : `Contact ${contact?.platform === 'telegram' ? 'Telegram' : 'WhatsApp'}`;
     }
-    // Fallback: phone_number or external_id
-    if (contact?.phone_number) return formatName(contact.phone_number);
-    // external_id fallback — mask numeric @lid IDs
-    const ext = contact?.external_id?.split('@')[0];
-    if (ext) {
-      const cleanExt = ext.replace(/[-\s]/g, '');
-      if (/^\d{10,}$/.test(cleanExt)) return 'Contact WhatsApp';
-      return formatName(ext);
-    }
-    return 'Inconnu';
-  };
+    // It's a real name or formatted phone number
+    return formatName(dn);
+  }
+  // Fallback: phone_number or external_id
+  if (contact?.phone_number) return formatName(contact.phone_number);
+  // external_id fallback — mask numeric @lid IDs
+  const ext = contact?.external_id?.split('@')[0];
+  if (ext) {
+    const cleanExt = ext.replace(/[-\s]/g, '');
+    if (/^\d{10,}$/.test(cleanExt)) return `Contact ${contact?.platform === 'telegram' ? 'Telegram' : 'WhatsApp'}`;
+    return formatName(ext);
+  }
+  return 'Inconnu';
+};
 
   const getDisplayName = (conv) => {
     const c = Array.isArray(conv.contacts) ? conv.contacts[0] : conv.contacts;
@@ -537,10 +539,10 @@ export default function App() {
     }
     // Fallback: conv title — but NEVER show a raw numeric @lid ID to the user
     const fallback = conv.title || conv.external_id?.split('@')[0];
-    if (!fallback) return 'Contact WhatsApp';
+    if (!fallback) return `Contact ${conv.platform === 'telegram' ? 'Telegram' : 'WhatsApp'}`;
     // If fallback is a pure numeric string (possibly with dashes) → it's a raw @lid ID
     const cleanFallback = fallback.replace(/[-\s]/g, '');
-    if (/^\d{10,}$/.test(cleanFallback)) return 'Contact WhatsApp';
+    if (/^\d{10,}$/.test(cleanFallback)) return `Contact ${conv.platform === 'telegram' ? 'Telegram' : 'WhatsApp'}`;
     return formatName(fallback);
   };
 
