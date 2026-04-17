@@ -399,8 +399,10 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
   };
 
   const startSocket = async () => {
-    logger.info(`[WA] Initializing socket for ${accountId}...`);
-    onEvent('status', { status: 'pairing' }); // Signal start to UI immediately
+    // Signal pairing to UI only if NOT already registered
+    if (!state.creds.registered) {
+      onEvent('status', { status: 'pairing' });
+    }
     
     // Check Multi-Instance Lock
     const hasLock = await claimLock();

@@ -784,10 +784,32 @@ app.use((req, res, next) => {
 
 async function restoreConnectors() {
   try {
-    const { data: accounts } = await supabase.from('accounts').select('*').eq('status', 'connected');
-    logger.info(`🔍 Startup: ${accounts?.length || 0} accounts à restaurer`);
-
+    // 1. Chercher tous les comptes qui NE SONT PAS explicitement supprimés
+    const { data: accounts } = await supabase.from('accounts').select('*');
+    
+    // Filtrage intelligent : on restaure si 'connected', OU si ('pairing'/'disconnected' MAIS avec une session valide)
+    const toRestore = [];
     for (const acc of (accounts || [])) {
+      if (acc.status === 'connected') {
+        toRestore.push(acc);
+      } else if (['pairing', 'disconnected'].includes(acc.status)) {
+        // Vérifier si une session active existe (creds.json)
+        const { data: session } = await supabase.from('account_sessions')
+          .select('id')
+          .eq('account_id', acc.id)
+          .eq('filename', 'NS:active:creds.json')
+          .maybeSingle();
+        
+        if (session) {
+          logger.info(`[RECOVERY] Account ${acc.id} (${acc.platform}) as session data but status is ${acc.status}. Restoring...`);
+          toRestore.push(acc);
+        }
+      }
+    }
+
+    logger.info(`🔍 Startup: ${toRestore.length} accounts à restaurer`);
+
+    for (const acc of toRestore) {
       logger.info(`🔄 Restoring ${acc.platform}: ${acc.id}`);
 
       if (acc.platform === 'whatsapp') {
