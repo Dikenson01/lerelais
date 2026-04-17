@@ -187,17 +187,21 @@ export const verifyTelegramCode = async (accountId, code, password2fa = null) =>
   const me = await client.getMe();
   const displayName = [me.firstName, me.lastName].filter(Boolean).join(' ') || me.username || phone;
 
-  await supabase.from('accounts').update({
-    status: 'connected',
-    username: me.username || phone,
-    account_name: displayName,
-    metadata: {
-      tg_session: sessionStr,
-      tg_phone: phone,
-      tg_user_id: me.id?.toString(),
-      tg_step: 'connected'
+    const { error: updateError } = await supabase.from('accounts').update({
+      status: 'connected',
+      username: me.username || phone,
+      account_name: displayName,
+      metadata: {
+        tg_session: sessionStr,
+        tg_phone: phone,
+        tg_user_id: me.id?.toString(),
+        tg_step: 'connected'
+      }
+    }).eq('id', accountId);
+
+    if (updateError) {
+      logger.error(`[TG-STATUS-UPDATE-ERR] ${updateError.message}`);
     }
-  }).eq('id', accountId);
 
   logger.info(`[TG] Connected as ${displayName} (account ${accountId})`);
   await attachTelegramListeners(accountId, client);
@@ -347,8 +351,8 @@ export const sendTelegramMessage = async (accountId, chatId, text) => {
     await session.client.connect();
   }
 
-  // chatId can be a numeric string — convert properly
-  const peer = isNaN(chatId) ? chatId : parseInt(chatId);
+  // chatId can be a numeric string — use BigInt for 64-bit precision
+  const peer = /^\d+$/.test(chatId) ? BigInt(chatId) : chatId;
   const result = await session.client.sendMessage(peer, { message: text });
   return { success: true, messageId: result.id?.toString() };
 };
@@ -361,7 +365,7 @@ export const sendTelegramMedia = async (accountId, chatId, { file, mimetype, cap
     await session.client.connect();
   }
 
-  const peer = isNaN(chatId) ? chatId : parseInt(chatId);
+  const peer = /^\d+$/.test(chatId) ? BigInt(chatId) : chatId;
   
   // Create a Buffer from the file (which might be a Buffer or a path)
   const result = await session.client.sendFile(peer, {
