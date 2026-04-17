@@ -554,7 +554,7 @@ app.post('/api/connect/whatsapp', async (req, res) => {
         activeConnectors[accountId] = connector;
       }
     } else if (type === 'message') {
-      relayToTelegram('whatsapp', payload.jid, payload.text, accountId, payload.jid);
+      relayToTelegram('whatsapp', payload.fromName, payload.text, accountId, payload.jid, payload.fromMe);
     }
   });
 
@@ -828,7 +828,7 @@ app.post('/api/connect/signal/verify', async (req, res) => {
 // TELEGRAM BOT
 // ============================================================
 
-async function relayToTelegram(platform, from, content, accountId, externalId) {
+async function relayToTelegram(platform, from, content, accountId, externalId, isOutgoing = false) {
   try {
     // 1. Trouver le propriétaire du compte
     const { data: acc } = await supabase.from('accounts').select('user_id').eq('id', accountId).maybeSingle();
@@ -837,20 +837,65 @@ async function relayToTelegram(platform, from, content, accountId, externalId) {
     // 2. Trouver le telegram_id de cet utilisateur
     const { data: user } = await supabase.from('relais_users').select('telegram_id').eq('id', acc.user_id).maybeSingle();
     if (!user?.telegram_id) {
-      // Fallback sur ADMIN_ID si défini
-      const adminId = process.env.ADMIN_ID;
-      if (adminId) {
-         await bot.telegram.sendMessage(adminId, `📥 *[LOGS]* Message pour user sans Telegram lié (${acc.user_id})\n*[${platform.toUpperCase()}]* ${from}: ${content}`, { parse_mode: 'Markdown' }).catch(() => {});
-      }
-      return;
+       // Fallback sur ADMIN_ID si défini
+       const adminId = process.env.ADMIN_ID;
+       if (adminId && !isOutgoing) { // Ne pas flooder les logs avec les messages sortants
+          await bot.telegram.sendMessage(adminId, `📥 *[LOGS]* Message pour user sans Telegram lié (${acc.user_id})\n*[${platform.toUpperCase()}]* ${from}: ${content}`, { parse_mode: 'Markdown' }).catch(() => {});
+       }
+       return;
     }
 
-    const sent = await bot.telegram.sendMessage(user.telegram_id, `📥 *[${platform.toUpperCase()}]* ${from}:\n${content}`, { parse_mode: 'Markdown' });
-    relayMap.set(sent.message_id, { accountId, externalId, platform });
+    const prefix = isOutgoing ? '📤' : '📥';
+    const sent = await bot.telegram.sendMessage(user.telegram_id, `${prefix} *[${platform.toUpperCase()}]* ${from}:\n${content}`, { parse_mode: 'Markdown' });
+    
+    // On ne stocke dans le relayMap que si c'est un message entrant (auquel on peut répondre)
+    if (!isOutgoing) {
+      relayMap.set(sent.message_id, { accountId, externalId, platform });
+    }
   } catch (e) {
     logger.error(`[RELAY-ERR] Error sending to Telegram: ${e.message}`);
   }
 }
+
+// Handler pour les RÉPONSES depuis Telegram
+bot.on('message', async (ctx, next) => {
+  // Ignorer les commandes
+  if (ctx.message.text?.startsWith('/')) return next();
+  
+  // Vérifier si c'est une réponse à un message relayé
+  const replyTo = ctx.message.reply_to_message;
+  if (!replyTo) {
+    // Optionnel: si message direct, on pourrait proposer une aide ou ignorer
+    return;
+  }
+
+  const target = relayMap.get(replyTo.message_id);
+  if (!target) {
+    return ctx.reply('⚠️ Désolé, je ne sais pas à quelle conversation répondre (le message a pu expirer de ma mémoire).');
+  }
+
+  try {
+    const connector = activeConnectors[target.accountId];
+    if (!connector) {
+      return ctx.reply(`❌ Le compte ${target.platform} n'est pas connecté au Hub actuellement.`);
+    }
+
+    const text = ctx.message.text || (ctx.message.photo ? '[Photo non supportée en réponse pour le moment]' : '[Média non supporté]');
+    if (text.startsWith('[')) return ctx.reply(text);
+
+    const sent = await connector.sendMessage(target.externalId, text);
+    if (sent.success) {
+      ctx.reply('✅ Envoyé', { reply_to_message_id: ctx.message.message_id });
+      // On relaye aussi notre propre réponse pour avoir l'historique propre
+      relayToTelegram(target.platform, 'Moi (via Bot)', text, target.accountId, target.externalId, true);
+    } else {
+      ctx.reply(`❌ Erreur: ${sent.error}`);
+    }
+  } catch (e) {
+    logger.error('[BOT-REPLY-ERR]', e.message);
+    ctx.reply('❌ Une erreur est survenue lors de l\'envoi.');
+  }
+});
 
 bot.start((ctx) => {
   const webAppUrl = process.env.WEBAPP_URL || 'https://lerelais.up.railway.app';
@@ -945,7 +990,7 @@ async function restoreConnectors() {
           else if (type === 'status') {
             supabase.from('accounts').update({ status: payload.status }).eq('id', acc.id).then(() => {});
             if (payload.status === 'connected') { qrMap.delete(acc.id); activeConnectors[acc.id] = connector; }
-          } else if (type === 'message') relayToTelegram('whatsapp', payload.jid, payload.text, acc.id, payload.jid);
+          } else if (type === 'message') relayToTelegram('whatsapp', payload.fromName, payload.text, acc.id, payload.jid, payload.fromMe);
         });
         activeConnectors[acc.id] = connector;
 

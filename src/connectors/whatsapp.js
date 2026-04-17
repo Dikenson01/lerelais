@@ -1344,9 +1344,8 @@ export const createWhatsAppConnector = async (accountId, onEvent, pairingPhone =
           last_message_at: realMsgTs
         }).eq('id', convId);
 
-        if (!isFromMe) {
-          onEvent('message', { jid, text: preview, fromMe: false });
-        }
+        const fromName = isFromMe ? 'Moi' : (msg.pushName || jid.split('@')[0]);
+        onEvent('message', { jid, text: preview, fromMe: isFromMe, fromName });
       }
     });
 
