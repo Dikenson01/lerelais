@@ -499,7 +499,6 @@ export default function App() {
       }
       const clean = dn.replace(/[+\s-]/g, '');
       // Pure numeric ID (12+ digits) = @lid ID stored as name → don't show it
-    const clean = dn.replace(/[+\s-]/g, '');
     // Pure numeric ID (12+ digits) = @lid ID stored as name → don't show it
     if (/^\d{10,}$/.test(clean)) {
       return contact?.phone_number ? formatName(contact.phone_number) : `Contact ${contact?.platform === 'telegram' ? 'Telegram' : 'WhatsApp'}`;
