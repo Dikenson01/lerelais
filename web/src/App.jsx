@@ -147,6 +147,16 @@ export default function App() {
     return () => window.removeEventListener('resize', fn);
   }, []);
 
+  // ── Telegram Seamless Linking ──────────────────────────────
+  useEffect(() => {
+    if (user && window.Telegram?.WebApp?.initData) {
+      const initData = window.Telegram.WebApp.initData;
+      axios.post(`${API}/auth/link-telegram`, { initData })
+        .then(() => console.log('[TMA] Account linked successfully'))
+        .catch(err => console.error('[TMA] Linking error:', err));
+    }
+  }, [user]);
+
   // ── Data Polling ───────────────────────────────────────────
   const preloadData = useCallback(async () => {
     try {

@@ -98,6 +98,62 @@ app.use('/api', requireAuth);
 // AUTH ROUTES
 // ============================================================
 
+// Link Telegram ID from Mini App
+app.post('/api/auth/link-telegram', async (req, res) => {
+  const { initData } = req.body;
+  if (!initData) return res.status(400).json({ error: 'initData requis' });
+
+  try {
+    const isValid = validateTelegramInitData(initData, process.env.TELEGRAM_BOT_TOKEN);
+    if (!isValid) {
+      logger.warn(`[AUTH-LINK] Invalid initData attempt by User ${req.userId}`);
+      return res.status(403).json({ error: 'Données Telegram invalides' });
+    }
+
+    // Extraire l'ID utilisateur
+    const params = new URLSearchParams(initData);
+    const tgUser = JSON.parse(params.get('user'));
+    const telegramId = tgUser.id;
+
+    if (!telegramId) throw new Error('Telegram ID introuvable dans initData');
+
+    const { data, error } = await supabase.from('relais_users')
+      .update({ telegram_id: telegramId })
+      .eq('id', req.userId)
+      .select()
+      .maybeSingle();
+
+    if (error || !data) throw error || new Error('Erreur mise à jour utilisateur');
+
+    logger.info(`[AUTH-LINK] User ${data.email} linked to Telegram ID ${telegramId}`);
+    res.json({ success: true, telegramId });
+  } catch (err) {
+    logger.error('[AUTH-LINK-ERR]', err.message);
+    res.status(500).json({ error: 'Erreur lors de la liaison Telegram' });
+  }
+});
+
+// Helper: Validation initData Telegram
+function validateTelegramInitData(initData, botToken) {
+  try {
+    const params = new URLSearchParams(initData);
+    const hash = params.get('hash');
+    params.delete('hash');
+
+    const dataCheckString = [...params.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, value]) => `${key}=${value}`)
+      .join('\n');
+
+    const secretKey = crypto.createHmac('sha256', 'WebAppData').update(botToken).digest();
+    const computedHash = crypto.createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
+
+    return computedHash === hash;
+  } catch (e) {
+    return false;
+  }
+}
+
 // Inscription
 app.post('/api/auth/register', async (req, res) => {
   const { username, password, displayName } = req.body;
