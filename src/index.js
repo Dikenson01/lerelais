@@ -745,19 +745,28 @@ app.post('/api/connect/signal/verify', async (req, res) => {
 
 async function relayToTelegram(platform, from, content, accountId, externalId) {
   const adminId = process.env.ADMIN_ID;
-  if (!adminId) return;
+  if (!adminId) {
+    logger.warn(`[RELAY] Skipping relay: ADMIN_ID not set. (from: ${from})`);
+    return;
+  }
   try {
     const sent = await bot.telegram.sendMessage(adminId, `📥 *[${platform.toUpperCase()}]* ${from}:\n${content}`, { parse_mode: 'Markdown' });
     relayMap.set(sent.message_id, { accountId, externalId, platform });
-  } catch (e) {}
+  } catch (e) {
+    logger.error(`[RELAY-ERR] Error sending to Telegram: ${e.message}`);
+  }
 }
 
 bot.start((ctx) => {
   const webAppUrl = process.env.WEBAPP_URL || 'https://lerelais.up.railway.app';
-  ctx.reply('✨ *Bienvenue sur LeRelais Hub*', {
+  ctx.reply('✨ *Bienvenue sur LeRelais Hub*\n\nUtilise /id pour obtenir ton ID de relayage.', {
     parse_mode: 'Markdown',
     reply_markup: { inline_keyboard: [[{ text: '🚀 Ouvrir le Hub', web_app: { url: webAppUrl } }]] }
   });
+});
+
+bot.command(['id', 'myid'], (ctx) => {
+  ctx.reply(`🆔 Ton ID Telegram est : \`${ctx.from.id}\`\n\nConfigure-le dans tes variables Railway sous le nom \`ADMIN_ID\` pour recevoir les messages ici.`, { parse_mode: 'Markdown' });
 });
 
 async function setupMenuButton() {
