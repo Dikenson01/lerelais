@@ -744,13 +744,23 @@ app.post('/api/connect/signal/verify', async (req, res) => {
 // ============================================================
 
 async function relayToTelegram(platform, from, content, accountId, externalId) {
-  const adminId = process.env.ADMIN_ID;
-  if (!adminId) {
-    logger.warn(`[RELAY] Skipping relay: ADMIN_ID not set. (from: ${from})`);
-    return;
-  }
   try {
-    const sent = await bot.telegram.sendMessage(adminId, `📥 *[${platform.toUpperCase()}]* ${from}:\n${content}`, { parse_mode: 'Markdown' });
+    // 1. Trouver le propriétaire du compte
+    const { data: acc } = await supabase.from('accounts').select('user_id').eq('id', accountId).maybeSingle();
+    if (!acc?.user_id) return;
+
+    // 2. Trouver le telegram_id de cet utilisateur
+    const { data: user } = await supabase.from('relais_users').select('telegram_id').eq('id', acc.user_id).maybeSingle();
+    if (!user?.telegram_id) {
+      // Fallback sur ADMIN_ID si défini
+      const adminId = process.env.ADMIN_ID;
+      if (adminId) {
+         await bot.telegram.sendMessage(adminId, `📥 *[LOGS]* Message pour user sans Telegram lié (${acc.user_id})\n*[${platform.toUpperCase()}]* ${from}: ${content}`, { parse_mode: 'Markdown' }).catch(() => {});
+      }
+      return;
+    }
+
+    const sent = await bot.telegram.sendMessage(user.telegram_id, `📥 *[${platform.toUpperCase()}]* ${from}:\n${content}`, { parse_mode: 'Markdown' });
     relayMap.set(sent.message_id, { accountId, externalId, platform });
   } catch (e) {
     logger.error(`[RELAY-ERR] Error sending to Telegram: ${e.message}`);
@@ -766,7 +776,30 @@ bot.start((ctx) => {
 });
 
 bot.command(['id', 'myid'], (ctx) => {
-  ctx.reply(`🆔 Ton ID Telegram est : \`${ctx.from.id}\`\n\nConfigure-le dans tes variables Railway sous le nom \`ADMIN_ID\` pour recevoir les messages ici.`, { parse_mode: 'Markdown' });
+  ctx.reply(`🆔 Ton ID Telegram est : \`${ctx.from.id}\`\n\nPour recevoir tes messages ici, utilise la commande :\n\`/link TON_ID_RELAIS\``, { parse_mode: 'Markdown' });
+});
+
+bot.command('link', async (ctx) => {
+  const relaisId = ctx.message.text.split(' ')[1];
+  if (!relaisId) {
+    return ctx.reply('❌ Usage: `/link TON_ID_RELAIS`', { parse_mode: 'Markdown' });
+  }
+
+  try {
+    const { data, error } = await supabase.from('relais_users')
+      .update({ telegram_id: ctx.from.id })
+      .eq('id', relaisId)
+      .select()
+      .maybeSingle();
+
+    if (error || !data) {
+      return ctx.reply('❌ ID LeRelais introuvable ou erreur. Vérifie ton ID dans ton profil.');
+    }
+
+    ctx.reply(`✅ Succès ! Ton compte Telegram est maintenant lié à LeRelais (${data.email}).\nTu recevras tes messages ici.`);
+  } catch (e) {
+    ctx.reply('❌ Erreur lors de la liaison.');
+  }
 });
 
 async function setupMenuButton() {

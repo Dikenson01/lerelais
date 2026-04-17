@@ -144,6 +144,7 @@ CREATE TABLE IF NOT EXISTS users (
   email TEXT UNIQUE NOT NULL,
   password_hash TEXT NOT NULL,
   display_name TEXT,
+  telegram_id BIGINT,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
