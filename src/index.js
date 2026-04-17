@@ -18,6 +18,7 @@ import {
   verifyTelegramCode,
   restoreTelegramConnector,
   sendTelegramMessage,
+  sendTelegramMedia,
   startTelegramQR,
   checkTelegramQRStatus
 } from './connectors/telegram.js';
@@ -396,8 +397,8 @@ app.post('/api/messages', async (req, res) => {
 
     if (connector) {
       const sent = await connector.sendMessage(conv.external_id, content);
-      if (sent.success) remoteId = sent.messageId;
-      else return res.status(503).json({ error: sent.error });
+      if (sent.success && sent.messageId) remoteId = sent.messageId;
+      else if (!sent.success) return res.status(503).json({ error: sent.error });
     }
 
     const { data: msg } = await supabase.from('messages').insert({
@@ -461,7 +462,7 @@ app.post('/api/messages/media', upload.single('file'), async (req, res) => {
       sentResult = await connector.sendMedia(conv.external_id, { file: buffer, mimetype: mime, caption: req.body.caption || '' });
     }
 
-    if (sentResult?.success) remoteId = sentResult.messageId;
+    if (sentResult?.success && sentResult.messageId) remoteId = sentResult.messageId;
 
     // Stocker dans Supabase Storage
     const ext = req.file.originalname.split('.').pop() || 'bin';
@@ -684,6 +685,7 @@ app.post('/api/connect/telegram/verify', async (req, res) => {
       // Store connector in activeConnectors so message sending works
       activeConnectors[accountId] = {
         sendMessage: async (chatId, text) => sendTelegramMessage(accountId, chatId, text),
+        sendMedia: async (chatId, media) => sendTelegramMedia(accountId, chatId, media),
         disconnect: async () => {}
       };
     }
@@ -971,7 +973,7 @@ async function restoreConnectors() {
       if (acc.status === 'connected') {
         toRestore.push(acc);
       } else if (['pairing', 'disconnected'].includes(acc.status)) {
-        // WhatsApp use account_sessions / creds.json
+        // WhatsApp use account_sessions / <div className={`platform-dot ${acc.platform || 'whatsapp'}`}/>
         if (acc.platform === 'whatsapp') {
           const { data: session } = await supabase.from('account_sessions')
             .select('id')

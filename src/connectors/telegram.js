@@ -349,8 +349,8 @@ export const sendTelegramMessage = async (accountId, chatId, text) => {
 
   // chatId can be a numeric string — convert properly
   const peer = isNaN(chatId) ? chatId : parseInt(chatId);
-  await session.client.sendMessage(peer, { message: text });
-  return { success: true };
+  const result = await session.client.sendMessage(peer, { message: text });
+  return { success: true, messageId: result.id?.toString() };
 };
 
 export const sendTelegramMedia = async (accountId, chatId, { file, mimetype, caption }) => {
@@ -364,13 +364,13 @@ export const sendTelegramMedia = async (accountId, chatId, { file, mimetype, cap
   const peer = isNaN(chatId) ? chatId : parseInt(chatId);
   
   // Create a Buffer from the file (which might be a Buffer or a path)
-  await session.client.sendFile(peer, {
+  const result = await session.client.sendFile(peer, {
     file: file,
     caption: caption || '',
     forceDocument: !mimetype.startsWith('image/'),
   });
 
-  return { success: true };
+  return { success: true, messageId: result.id?.toString() };
 };
 
 // ─────────────────────────────────────────────

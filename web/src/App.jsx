@@ -754,7 +754,7 @@ export default function App() {
                       ? <img src={getAvatar(conv)} alt="" onError={(e) => { e.target.style.display='none'; e.target.nextElementSibling?.style && (e.target.nextElementSibling.style.display='flex'); }}/>
                       : null}
                     <div className="avatar-placeholder" style={getAvatar(conv) ? {display:'none'} : {}}/>
-                    <div className="platform-dot whatsapp"/>
+                    <div className={`platform-dot ${conv.platform || 'whatsapp'}`}/>
                   </div>
                   <div className="conv-content">
                     <div className="conv-top">
@@ -801,7 +801,7 @@ export default function App() {
                 </div>
                 <div className="header-info">
                   <h2>{getDisplayName(selectedConv)}</h2>
-                  <span className="status">WhatsApp • {selectedConv.is_group && selectedConv.group_metadata?.participants ? `${selectedConv.group_metadata.participants.length} participants` : 'En ligne'}</span>
+                  <span className="status">{selectedConv.platform === 'telegram' ? 'Telegram' : 'WhatsApp'} • {selectedConv.is_group && selectedConv.group_metadata?.participants ? `${selectedConv.group_metadata.participants.length} participants` : 'En ligne'}</span>
                 </div>
               </div>
               <div className="header-actions">
