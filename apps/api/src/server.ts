@@ -6,6 +6,7 @@ import path from 'path';
 import { Server } from 'socket.io';
 import { createServer } from 'http';
 import { db } from '@lerelais/db';
+import { authRoutes } from './modules/auth/routes.js';
 import { conversationsRoutes } from './modules/conversations/routes.js';
 import { contactsRoutes } from './modules/contacts/routes.js';
 import { messagesRoutes } from './modules/messages/routes.js';
@@ -37,6 +38,7 @@ const io = new Server(fastify.server, {
 fastify.decorate('io', io);
 
 // Register routes
+await fastify.register(authRoutes, { prefix: '/api/auth' });
 await fastify.register(conversationsRoutes, { prefix: '/api/conversations' });
 await fastify.register(contactsRoutes, { prefix: '/api/contacts' });
 await fastify.register(messagesRoutes, { prefix: '/api/messages' });
