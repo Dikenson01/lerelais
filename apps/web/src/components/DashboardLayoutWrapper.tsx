@@ -16,7 +16,7 @@ export function DashboardLayoutWrapper({ children }: { children: React.ReactNode
     <AuthProvider>
       <div className="flex flex-col md:flex-row h-full w-full relative">
         <Sidebar />
-        <main className="flex-1 flex min-w-0 bg-white pb-16 md:pb-0 overflow-hidden">
+        <main className="flex-1 flex flex-col min-w-0 bg-white pb-16 md:pb-0 overflow-hidden relative">
           {children}
         </main>
       </div>
