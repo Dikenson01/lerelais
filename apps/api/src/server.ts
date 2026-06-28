@@ -45,6 +45,16 @@ await fastify.register(messagesRoutes, { prefix: '/api/messages' });
 await fastify.register(campaignsRoutes, { prefix: '/api/campaigns' });
 await fastify.register(accountsRoutes, { prefix: '/api/accounts' });
 
+import { connectorManager } from './connectors/manager.js';
+
+connectorManager.on('qr_code', (payload: any) => {
+  io.emit('qr_code', payload.data);
+});
+
+connectorManager.on('connection_update', (payload: any) => {
+  io.emit('connection_update', payload.data);
+});
+
 // Health check
 fastify.get('/api/health', async () => ({
   status: 'ok',

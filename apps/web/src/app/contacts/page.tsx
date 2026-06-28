@@ -67,8 +67,8 @@ export default function ContactsPage() {
   };
 
   return (
-    <div className="flex-1 p-4 md:p-8 overflow-y-auto">
-      <div className="max-w-6xl mx-auto">
+    <div className="flex-1 p-4 md:p-8 overflow-y-auto overflow-x-hidden max-w-full w-full">
+      <div className="max-w-6xl mx-auto w-full">
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 md:mb-8 space-y-4 md:space-y-0">
           <h1 className="text-2xl md:text-3xl font-bold text-slate-900 flex items-center">
             <Users className="w-6 h-6 md:w-8 md:h-8 mr-3 text-blue-600" />

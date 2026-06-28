@@ -10,9 +10,11 @@ export default function SettingsPage() {
   const [accounts, setAccounts] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [qrCode, setQrCode] = useState<string | null>(null);
+  const [orgId, setOrgId] = useState<string | null>(null);
   const { socket } = useSocket();
 
   useEffect(() => {
+    fetchApi("/auth/me").then(user => setOrgId(user.orgId)).catch(console.error);
     loadAccounts();
     
     if (socket) {
@@ -52,8 +54,8 @@ export default function SettingsPage() {
         body: JSON.stringify({
           platform: "whatsapp",
           accountName: "WhatsApp Principal",
-          // Default organization ID (in a real app, from auth token)
-          orgId: "00000000-0000-0000-0000-000000000000"
+          // Use fetched orgId or fallback to default
+          orgId: orgId || "00000000-0000-0000-0000-000000000000"
         })
       });
       loadAccounts();
@@ -73,9 +75,9 @@ export default function SettingsPage() {
   };
 
   return (
-    <div className="flex-1 p-8 overflow-y-auto">
-      <div className="max-w-4xl mx-auto">
-        <h1 className="text-3xl font-bold text-slate-900 mb-8">Settings</h1>
+    <div className="flex-1 p-4 md:p-8 overflow-y-auto overflow-x-hidden max-w-full w-full">
+      <div className="max-w-4xl mx-auto w-full">
+        <h1 className="text-2xl md:text-3xl font-bold text-slate-900 mb-6 md:mb-8">Settings</h1>
         
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden mb-8">
           <div className="px-6 py-4 border-b border-slate-200 flex justify-between items-center">
