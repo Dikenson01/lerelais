@@ -4,8 +4,16 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "tsup src/server.ts --format esm --platform node --clean --no-external @lerelais/db --no-external @lerelais/shared --external pg --external drizzle-orm --external dotenv",
+    "build": "tsup",
     "start": "node dist/server.js"
+  },
+  "tsup": {
+    "entry": ["src/server.ts"],
+    "format": ["esm"],
+    "platform": "node",
+    "clean": true,
+    "noExternal": ["@lerelais/db", "@lerelais/shared"],
+    "external": ["pg", "drizzle-orm", "dotenv"]
   },
   "dependencies": {
     "@fastify/cors": "^10.0.0",
