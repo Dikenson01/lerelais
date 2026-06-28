@@ -1,6 +1,8 @@
 import 'dotenv/config';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
+import fastifyStatic from '@fastify/static';
+import path from 'path';
 import { Server } from 'socket.io';
 import { createServer } from 'http';
 import { db } from '@lerelais/db';
@@ -46,11 +48,27 @@ await fastify.register(campaignsRoutes, { prefix: '/api/campaigns' });
 await fastify.register(accountsRoutes, { prefix: '/api/accounts' });
 
 // Health check
-fastify.get('/health', async () => ({
+fastify.get('/api/health', async () => ({
   status: 'ok',
   timestamp: new Date().toISOString(),
   version: '1.0.0',
 }));
+
+// Serve Frontend Static Files
+fastify.register(fastifyStatic, {
+  root: path.join(process.cwd(), '../web/out'),
+  prefix: '/',
+  wildcard: false,
+});
+
+fastify.setNotFoundHandler((request, reply) => {
+  if (request.url.startsWith('/api/')) {
+    reply.status(404).send({ error: 'Not Found' });
+  } else {
+    // Basic fallback for Next.js static routing
+    reply.sendFile('index.html');
+  }
+});
 
 // Socket.IO connection handling
 io.on('connection', (socket) => {

@@ -10,6 +10,7 @@
   "dependencies": {
     "@fastify/cors": "^10.0.0",
     "@fastify/multipart": "^9.0.0",
+    "@fastify/static": "^9.1.3",
     "@fastify/websocket": "^11.0.0",
     "@lerelais/db": "*",
     "@lerelais/shared": "*",

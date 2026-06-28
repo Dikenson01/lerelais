@@ -8,7 +8,7 @@
     "dev:api": "cd apps/api && npm run dev",
     "dev:web": "cd apps/web && npm run dev",
     "build": "npx turbo build --concurrency=1",
-    "start": "npx turbo start",
+    "start": "cd apps/api && npm start",
     "start:api": "cd apps/api && npm start",
     "start:web": "cd apps/web && npm start",
     "db:push": "cd packages/db && npx drizzle-kit push",
