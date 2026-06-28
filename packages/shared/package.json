@@ -1,0 +1,10 @@
+{
+  "name": "@lerelais/shared",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "src/index.ts",
+  "dependencies": {},
+  "devDependencies": {
+    "typescript": "^5.8.0"
+  }
+}
