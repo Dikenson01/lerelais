@@ -4,7 +4,6 @@ node_modules
 dist
 web/node_modules
 web/dist
-auth/
 *.log
 qr.png
 .ngrok
