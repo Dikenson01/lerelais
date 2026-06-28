@@ -59,14 +59,14 @@ fastify.register(fastifyStatic, {
   root: path.join(process.cwd(), '../web/out'),
   prefix: '/',
   wildcard: false,
+  extensions: ['html'],
 });
 
 fastify.setNotFoundHandler((request, reply) => {
   if (request.url.startsWith('/api/')) {
     reply.status(404).send({ error: 'Not Found' });
   } else {
-    // Basic fallback for Next.js static routing
-    reply.sendFile('index.html');
+    reply.sendFile('404.html');
   }
 });
 
