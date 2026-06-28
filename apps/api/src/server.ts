@@ -25,11 +25,8 @@ await fastify.register(cors, {
   credentials: true,
 });
 
-// Create HTTP server for Socket.IO
-const httpServer = createServer(fastify.server);
-
 // Socket.IO setup
-const io = new Server(httpServer, {
+const io = new Server(fastify.server, {
   cors: {
     origin: process.env.FRONTEND_URL || 'http://localhost:5173',
     credentials: true,
@@ -94,7 +91,14 @@ if (botToken) {
   const bot = new Telegraf(botToken);
   
   bot.start((ctx) => {
-    ctx.reply('👋 Bienvenue sur Le Relais ! Le bot est en ligne et fonctionnel. 🚀');
+    ctx.reply('👋 Bienvenue sur Le Relais ! Le bot est en ligne et fonctionnel. 🚀\n\nCliquez sur le bouton ci-dessous pour accéder à la plateforme :', {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "Ouvrir Le Relais (Mini App)", web_app: { url: "https://lerelais-app-production.up.railway.app" } }],
+          [{ text: "Ouvrir dans le navigateur", url: "https://lerelais-app-production.up.railway.app" }]
+        ]
+      }
+    });
   });
 
   bot.launch().then(() => {
@@ -114,11 +118,8 @@ if (botToken) {
 const port = parseInt(process.env.PORT || '3000');
 
 try {
-  // Use httpServer.listen instead of fastify.listen for Socket.IO compatibility
-  await fastify.ready();
-  httpServer.listen(port, '0.0.0.0', () => {
-    fastify.log.info(`LeRelais API running on http://localhost:${port}`);
-  });
+  await fastify.listen({ port, host: '0.0.0.0' });
+  fastify.log.info(`LeRelais API running on http://0.0.0.0:${port}`);
 } catch (err) {
   fastify.log.error(err);
   process.exit(1);
