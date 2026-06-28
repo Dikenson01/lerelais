@@ -57,15 +57,16 @@ fastify.get('/api/health', async () => ({
 fastify.register(fastifyStatic, {
   root: path.join(process.cwd(), '../web/out'),
   prefix: '/',
-  wildcard: false,
   extensions: ['html'],
 });
 
 fastify.setNotFoundHandler((request, reply) => {
   if (request.url.startsWith('/api/')) {
     reply.status(404).send({ error: 'Not Found' });
+  } else if (request.url === '/index.html' || request.url === '/404.html') {
+    reply.status(404).send('Not Found');
   } else {
-    reply.sendFile('404.html');
+    reply.sendFile('index.html');
   }
 });
 
