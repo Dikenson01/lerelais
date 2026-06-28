@@ -11,6 +11,7 @@ import { contactsRoutes } from './modules/contacts/routes.js';
 import { messagesRoutes } from './modules/messages/routes.js';
 import { campaignsRoutes } from './modules/campaigns/routes.js';
 import { accountsRoutes } from './modules/accounts/routes.js';
+import { Telegraf } from 'telegraf';
 
 const fastify = Fastify({
   logger: {
@@ -85,6 +86,28 @@ io.on('connection', (socket) => {
     fastify.log.info(`Client disconnected: ${socket.id}`);
   });
 });
+
+// Telegram Bot setup
+const botToken = process.env.TELEGRAM_BOT_TOKEN;
+if (botToken) {
+  const bot = new Telegraf(botToken);
+  
+  bot.start((ctx) => {
+    ctx.reply('👋 Bienvenue sur Le Relais ! Le bot est en ligne et fonctionnel. 🚀');
+  });
+
+  bot.launch().then(() => {
+    fastify.log.info('🤖 Bot Telegram démarré avec succès');
+  }).catch(err => {
+    fastify.log.error('Erreur lors du lancement du bot Telegram:', err);
+  });
+
+  // Enable graceful stop
+  process.once('SIGINT', () => bot.stop('SIGINT'));
+  process.once('SIGTERM', () => bot.stop('SIGTERM'));
+} else {
+  fastify.log.warn('⚠️ TELEGRAM_BOT_TOKEN non défini. Le bot Telegram ne sera pas démarré.');
+}
 
 // Start server
 const port = parseInt(process.env.PORT || '3000');
