@@ -10,7 +10,7 @@
     "dev": "npx turbo dev",
     "dev:api": "cd apps/api && npm run dev",
     "dev:web": "cd apps/web && npm run dev",
-    "build": "NODE_OPTIONS=\"--max-old-space-size=400\" npx turbo build --concurrency=1",
+    "build": "npx turbo build --concurrency=1",
     "start": "cd apps/api && npm start",
     "start:api": "cd apps/api && npm start",
     "start:web": "cd apps/web && npm start",

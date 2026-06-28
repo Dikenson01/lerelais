@@ -2,9 +2,10 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   output: 'export',
-  /* config options here */
-  eslint: {
-    ignoreDuringBuilds: true,
+  experimental: {
+    cpus: 1,
+    workerThreads: false,
+    memoryBasedWorkersCount: true
   },
   typescript: {
     ignoreBuildErrors: true,
