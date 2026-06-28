@@ -6,6 +6,9 @@
     "apps/*",
     "packages/*"
   ],
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "scripts": {
     "dev": "npx turbo dev",
     "dev:api": "cd apps/api && npm run dev",
