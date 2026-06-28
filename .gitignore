@@ -11,3 +11,7 @@ qr.png
 localtunnel_url.txt
 web/vite.config.js.timestamp*.mjs
 scratch/
+.turbo
+.next
+apps/web/.next
+apps/web/out

@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "tsup",
+    "build": "tsup src/server.ts --format esm --platform node --clean --no-external @lerelais/db --no-external @lerelais/shared --external pg --external drizzle-orm --external dotenv",
     "start": "node dist/server.js"
   },
   "dependencies": {
