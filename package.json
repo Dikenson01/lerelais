@@ -4,10 +4,13 @@
   "packageManager": "npm@11.17.0",
   "workspaces": ["apps/*", "packages/*"],
   "scripts": {
-    "dev": "turbo dev",
+    "dev": "npx turbo dev",
     "dev:api": "cd apps/api && npm run dev",
     "dev:web": "cd apps/web && npm run dev",
-    "build": "turbo build",
+    "build": "npx turbo build",
+    "start": "npx turbo start",
+    "start:api": "cd apps/api && npm start",
+    "start:web": "cd apps/web && npm start",
     "db:push": "cd packages/db && npx drizzle-kit push",
     "db:generate": "cd packages/db && npx drizzle-kit generate",
     "db:studio": "cd packages/db && npx drizzle-kit studio"
