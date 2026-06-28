@@ -9,7 +9,6 @@ import { db } from '@lerelais/db';
 import { conversationsRoutes } from './modules/conversations/routes.js';
 import { contactsRoutes } from './modules/contacts/routes.js';
 import { messagesRoutes } from './modules/messages/routes.js';
-import { authRoutes } from './modules/auth/routes.js';
 import { campaignsRoutes } from './modules/campaigns/routes.js';
 import { accountsRoutes } from './modules/accounts/routes.js';
 
@@ -40,7 +39,6 @@ const io = new Server(httpServer, {
 fastify.decorate('io', io);
 
 // Register routes
-await fastify.register(authRoutes, { prefix: '/api/auth' });
 await fastify.register(conversationsRoutes, { prefix: '/api/conversations' });
 await fastify.register(contactsRoutes, { prefix: '/api/contacts' });
 await fastify.register(messagesRoutes, { prefix: '/api/messages' });
