@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "NODE_OPTIONS=\"--max-old-space-size=400\" next build",
     "start": "next start",
     "lint": "eslint"
   },
@@ -17,9 +17,7 @@
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "socket.io-client": "^4.8.3",
-    "tailwind-merge": "^3.6.0"
-  },
-  "devDependencies": {
+    "tailwind-merge": "^3.6.0",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",

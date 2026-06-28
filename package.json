@@ -2,12 +2,15 @@
   "name": "lerelais-platform",
   "private": true,
   "packageManager": "npm@11.17.0",
-  "workspaces": ["apps/*", "packages/*"],
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
     "dev": "npx turbo dev",
     "dev:api": "cd apps/api && npm run dev",
     "dev:web": "cd apps/web && npm run dev",
-    "build": "npx turbo build --concurrency=1",
+    "build": "NODE_OPTIONS=\"--max-old-space-size=400\" npx turbo build --concurrency=1",
     "start": "cd apps/api && npm start",
     "start:api": "cd apps/api && npm start",
     "start:web": "cd apps/web && npm start",
@@ -15,7 +18,7 @@
     "db:generate": "cd packages/db && npx drizzle-kit generate",
     "db:studio": "cd packages/db && npx drizzle-kit studio"
   },
-  "devDependencies": {
+  "dependencies": {
     "turbo": "^2.5.0",
     "typescript": "^5.8.0"
   }

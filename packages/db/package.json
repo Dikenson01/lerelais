@@ -11,9 +11,7 @@
   },
   "dependencies": {
     "drizzle-orm": "^0.44.0",
-    "pg": "^8.16.0"
-  },
-  "devDependencies": {
+    "pg": "^8.16.0",
     "drizzle-kit": "^0.31.0",
     "@types/pg": "^8.11.0",
     "typescript": "^5.8.0"
