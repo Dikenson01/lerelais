@@ -63,16 +63,16 @@ export default function CampaignsPage() {
   };
 
   return (
-    <div className="flex-1 p-8 overflow-y-auto">
+    <div className="flex-1 p-4 md:p-8 overflow-y-auto">
       <div className="max-w-6xl mx-auto">
-        <div className="flex justify-between items-center mb-8">
-          <h1 className="text-3xl font-bold text-slate-900 flex items-center">
-            <Megaphone className="w-8 h-8 mr-3 text-blue-600" />
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 md:mb-8 space-y-4 md:space-y-0">
+          <h1 className="text-2xl md:text-3xl font-bold text-slate-900 flex items-center">
+            <Megaphone className="w-6 h-6 md:w-8 md:h-8 mr-3 text-blue-600" />
             Campagnes
           </h1>
           <button 
             onClick={() => setShowCreate(!showCreate)}
-            className="flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition shadow-sm font-medium"
+            className="flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition shadow-sm font-medium w-full md:w-auto justify-center"
           >
             <Plus className="w-5 h-5 mr-2" />
             Nouvelle Campagne
@@ -80,9 +80,9 @@ export default function CampaignsPage() {
         </div>
 
         {showCreate && (
-          <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 mb-8 animate-in fade-in slide-in-from-top-4">
-            <h2 className="text-xl font-bold text-slate-900 mb-4">Créer une campagne</h2>
-            <div className="grid grid-cols-2 gap-6 mb-6">
+          <div className="bg-white p-4 md:p-6 rounded-xl shadow-sm border border-slate-200 mb-8 animate-in fade-in slide-in-from-top-4">
+            <h2 className="text-lg md:text-xl font-bold text-slate-900 mb-4">Créer une campagne</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6 mb-6">
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Nom de la campagne</label>
                 <input 

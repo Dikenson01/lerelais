@@ -67,22 +67,22 @@ export default function ContactsPage() {
   };
 
   return (
-    <div className="flex-1 p-8 overflow-y-auto">
+    <div className="flex-1 p-4 md:p-8 overflow-y-auto">
       <div className="max-w-6xl mx-auto">
-        <div className="flex justify-between items-center mb-8">
-          <h1 className="text-3xl font-bold text-slate-900 flex items-center">
-            <Users className="w-8 h-8 mr-3 text-blue-600" />
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 md:mb-8 space-y-4 md:space-y-0">
+          <h1 className="text-2xl md:text-3xl font-bold text-slate-900 flex items-center">
+            <Users className="w-6 h-6 md:w-8 md:h-8 mr-3 text-blue-600" />
             Contacts
           </h1>
-          <div className="flex space-x-3">
+          <div className="flex flex-col sm:flex-row space-y-3 sm:space-y-0 sm:space-x-3 w-full md:w-auto">
             <button 
               onClick={() => setShowImport(!showImport)}
-              className="flex items-center px-4 py-2 bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 transition font-medium"
+              className="flex items-center justify-center px-4 py-2 bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 transition font-medium w-full sm:w-auto"
             >
               <Upload className="w-5 h-5 mr-2" />
               Importer CSV
             </button>
-            <button className="flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition shadow-sm font-medium">
+            <button className="flex items-center justify-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition shadow-sm font-medium w-full sm:w-auto">
               <Plus className="w-5 h-5 mr-2" />
               Nouveau Contact
             </button>
